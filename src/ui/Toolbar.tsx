@@ -51,17 +51,18 @@ export default function Toolbar() {
       case 'wall':
         return (
           <>
-            <select
-              value={editor.wallThickness}
-              onChange={(e) => setEditor({ wallThickness: +e.target.value })}
-              title="Épaisseur de la cloison"
-            >
-              <option value={5}>5 cm</option>
-              <option value={7}>7 cm</option>
-              <option value={10}>10 cm</option>
-              <option value={13}>13 cm</option>
-              <option value={20}>20 cm</option>
-            </select>
+            <span className="tb-thick" title="Épaisseur de la cloison, en cm (valeur libre)">
+              Épaisseur
+              <input
+                type="number" min={1} step={0.5} list="wall-th" value={editor.wallThickness}
+                onChange={(e) => { const v = +e.target.value; if (v > 0) setEditor({ wallThickness: v }); }}
+                style={{ width: 58 }}
+              />cm
+            </span>
+            <datalist id="wall-th">
+              <option value={5} /><option value={7} /><option value={10} />
+              <option value={13} /><option value={20} />
+            </datalist>
             <select
               value={editor.wallAlign}
               onChange={(e) => setEditor({ wallAlign: e.target.value as WallAlign })}

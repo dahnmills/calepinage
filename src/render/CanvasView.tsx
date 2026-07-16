@@ -964,17 +964,15 @@ export default function CanvasView({ highlightCuts, showNumbers }: { highlightCu
             </label>
             <div className="muted">Glissez la cloison pour la déplacer, ou une extrémité pour l'étirer.</div>
             <label className="field">
-              <span>Épaisseur</span>
-              <select
-                value={w.thickness}
-                onChange={(e) => updatePartition(i, { thickness: +e.target.value })}
-              >
-                <option value={5}>5 cm</option>
-                <option value={7}>7 cm (placo)</option>
-                <option value={10}>10 cm</option>
-                <option value={13}>13 cm</option>
-                <option value={20}>20 cm</option>
-              </select>
+              <span>Épaisseur (cm)</span>
+              <input
+                type="number" min={1} step={0.5} list="wall-th-card" value={w.thickness}
+                onChange={(e) => { const v = +e.target.value; if (v > 0) updatePartition(i, { thickness: v }); }}
+              />
+              <datalist id="wall-th-card">
+                <option value={5} /><option value={7} /><option value={10} />
+                <option value={13} /><option value={20} />
+              </datalist>
             </label>
             <label className="field">
               <span>Épaisseur portée</span>
