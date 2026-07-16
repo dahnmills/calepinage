@@ -331,6 +331,8 @@ export default function CanvasView({ highlightCuts, showNumbers }: { highlightCu
     // Cotes permanentes des murs : le tracé étant le nu intérieur, la cote affichée est
     // bien la longueur mesurée dans la pièce.
     if (room.points.length >= 2) drawDims(ctx, room.points, view, edgeLabels.current);
+    // Cotes des cloisons intérieures : chaque segment porte sa longueur, comme les murs.
+    for (const w of room.partitions ?? []) drawPartitionDims(ctx, w.points, view);
     // Sommets manipulables (édition seule).
     if (tool === 'edit' && room.points.length >= 2) {
       drawVertices(ctx, room.points, view, hoverVertex, selectedVertex);
@@ -1605,6 +1607,32 @@ function drawDims(
     roundRect(ctx, sx - w / 2, sy - 10, w, 20, 5);
     ctx.fill(); ctx.stroke();
     ctx.fillStyle = '#1d4ed8';
+    ctx.fillText(txt, sx, sy);
+  }
+}
+
+/** Cotes d'une cloison : longueur de chaque segment, en gris foncé (couleur des cloisons). */
+function drawPartitionDims(ctx: CanvasRenderingContext2D, pts: Point[], v: View) {
+  ctx.font = '600 11px system-ui';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i], b = pts[i + 1];
+    const length = Math.hypot(b.x - a.x, b.y - a.y);
+    if (length < 1) continue;
+    const dx = b.x - a.x, dy = b.y - a.y, l = length || 1;
+    const nx = -dy / l, ny = dx / l;
+    const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    const s = worldToScreen(mid, v);
+    const sx = s.x + nx * 16, sy = s.y + ny * 16;
+    const txt = `${Math.round(length)}`;
+    const w = ctx.measureText(txt).width + 10;
+    ctx.fillStyle = '#ffffff';
+    ctx.strokeStyle = '#94a3b8';
+    ctx.lineWidth = 1;
+    roundRect(ctx, sx - w / 2, sy - 9, w, 18, 5);
+    ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#1e293b';
     ctx.fillText(txt, sx, sy);
   }
 }

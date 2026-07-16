@@ -224,8 +224,13 @@ export function snapDrawPoint(ctx: SnapContext): SnapResult {
   let angle: number | null = null;
   if (last && snapAngle) {
     const s = snapAngleFrom(last, snapGrid ? snapToGrid(raw, gridStep) : raw, angleStep);
-    p = s.point;
     angle = s.angle;
+    // Angle contraint : on garde la direction exacte, mais on cale AUSSI la longueur sur
+    // la grille. Sinon le point tombe à un angle juste mais une longueur bâtarde (23,4 cm),
+    // et le trait paraît « de travers » avec des cotes qui ne tombent jamais rond.
+    let len = dist(last, s.point);
+    if (snapGrid && gridStep > 0) len = Math.round(len / gridStep) * gridStep;
+    p = add(last, scale(dirFromAngle(angle), len));
   } else if (last) {
     angle = angleDeg(sub(p, last));
   }
