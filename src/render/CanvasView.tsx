@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import polygonClipping, { type MultiPolygon, type Polygon, type Ring } from 'polygon-clipping';
 import { useStore } from '../store/useStore';
 import { polygonBBox, pointInPolygon, segmentRect, offsetPolygon } from '../model/geometry';
 import { ghostRows, poseDirection, poseFrame, type GhostRow, type PoseFrame } from '../model/startline';
@@ -41,7 +42,8 @@ export default function CanvasView({ highlightCuts, showNumbers }: { highlightCu
     tool, room, drawing, result, editor, selectedVertex, config, packs, measures, measureStart,
     addDrawPoint, undoDrawPoint, closeRoom, closeHole, closePartition, clearRoom, setTool,
     moveVertex, insertVertex, deleteVertex, setEdgeLength, selectVertex, addDoor, setConfig,
-    removePartition, updatePartition, movePartitionPoint, removeDoor, updateDoor,
+    removePartition, updatePartition, movePartitionPoint, moveWholePartition, setPartitionLength,
+    removeDoor, updateDoor,
     startMeasure, finishMeasure, cancelMeasure,
     tagSpace,
     snapshot, undo, redo,
@@ -97,6 +99,8 @@ export default function CanvasView({ highlightCuts, showNumbers }: { highlightCu
   const draggingStart = useRef(false);
   /** Porte en cours de glissement : elle coulisse le long de son mur ou de sa cloison. */
   const draggingDoor = useRef<number>(-1);
+  /** Cloison déplacée en bloc : index + position du curseur au début du glissement. */
+  const draggingWholePart = useRef<{ index: number; from: Point } | null>(null);
   const [selectedEl, setSelectedEl] = useState<{ type: 'partition' | 'door'; index: number } | null>(null);
   const rawWorld = useRef<Point>({ x: 0, y: 0 });
   const edgeLabels = useRef<EdgeLabel[]>([]);
@@ -311,7 +315,9 @@ export default function CanvasView({ highlightCuts, showNumbers }: { highlightCu
         ctx.closePath();
         ctx.clip();
       }
-      for (const w of room.partitions) drawPartition(ctx, w, view);
+      // Toutes les cloisons fusionnées en une seule forme : les jonctions (T, L, croix)
+      // se soudent, sans couture ni contour interne à l'endroit où deux cloisons se touchent.
+      drawPartitionsUnion(ctx, room.partitions, view);
       ctx.restore();
     }
     // Portes / ouvertures (murs du périmètre et cloisons).
@@ -450,6 +456,14 @@ export default function CanvasView({ highlightCuts, showNumbers }: { highlightCu
       if (vi >= 0) { snapshot(); draggingVertex.current = vi; selectVertex(vi); setSelectedEl(null); return; }
       const pep = partitionEndpointHit(w);
       if (pep) { snapshot(); draggingPart.current = pep; setSelectedEl({ type: 'partition', index: pep.pi }); selectVertex(null); return; }
+      // Corps d'une cloison (hors extrémité) : on la déplace en bloc.
+      const pseg = partitionSegHit(w);
+      if (pseg >= 0) {
+        snapshot();
+        draggingWholePart.current = { index: pseg, from: { x: w.x, y: w.y } };
+        setSelectedEl({ type: 'partition', index: pseg }); selectVertex(null); setPickedPlank(null);
+        return;
+      }
     }
     dragRef.current = { x: e.clientX, y: e.clientY, ox: view.ox, oy: view.oy, moved: false };
   };
@@ -495,6 +509,15 @@ export default function CanvasView({ highlightCuts, showNumbers }: { highlightCu
       movePartitionPoint(draggingPart.current.pi, draggingPart.current.ki, { x: Math.round(snapped.x), y: Math.round(snapped.y) });
       return;
     }
+    // Déplacer une cloison entière : translation de tous ses points, calée à la grille.
+    if (draggingWholePart.current) {
+      const drag = draggingWholePart.current;
+      const gx = editor.snapGrid ? Math.round((w.x - drag.from.x) / editor.gridStep) * editor.gridStep : w.x - drag.from.x;
+      const gy = editor.snapGrid ? Math.round((w.y - drag.from.y) / editor.gridStep) * editor.gridStep : w.y - drag.from.y;
+      moveWholePartition(drag.index, gx, gy);
+      draggingWholePart.current = { index: drag.index, from: { x: drag.from.x + gx, y: drag.from.y + gy } };
+      return;
+    }
 
     const d = dragRef.current;
     if (d && e.buttons === 1) {
@@ -507,7 +530,7 @@ export default function CanvasView({ highlightCuts, showNumbers }: { highlightCu
     if (isDrawing) setPreview(computePreview(w));
     else if (tool === 'edit') {
       setHoverVertex(nearestVertex(room.points, w, vThresh()));
-      setHoverDoor(doorHit(w) >= 0);
+      setHoverDoor(doorHit(w) >= 0 || partitionSegHit(w) >= 0 || partitionEndpointHit(w) != null);
     }
   };
 
@@ -516,6 +539,7 @@ export default function CanvasView({ highlightCuts, showNumbers }: { highlightCu
     if (draggingStart.current) { draggingStart.current = false; return; }
     if (draggingVertex.current >= 0) { draggingVertex.current = -1; return; }
     if (draggingPart.current) { draggingPart.current = null; return; }
+    if (draggingWholePart.current) { draggingWholePart.current = null; return; }
     setTimeout(() => (dragRef.current = null), 0);
   };
 
@@ -928,7 +952,17 @@ export default function CanvasView({ highlightCuts, showNumbers }: { highlightCu
               <b>Cloison {i + 1}</b>
               <button onClick={() => setSelectedEl(null)}>✕</button>
             </div>
-            <div className="muted">Longueur : {Math.round(len)} cm</div>
+            <label className="field">
+              <span>Longueur {w.points.length > 2 ? '(dernier segment)' : ''} (cm)</span>
+              <input
+                type="number" min={1} step={1}
+                value={Math.round(w.points.length > 2
+                  ? dist(w.points[w.points.length - 2], w.points[w.points.length - 1])
+                  : len)}
+                onChange={(e) => { const v = +e.target.value; if (v > 0) setPartitionLength(i, v); }}
+              />
+            </label>
+            <div className="muted">Glissez la cloison pour la déplacer, ou une extrémité pour l'étirer.</div>
             <label className="field">
               <span>Épaisseur</span>
               <select
@@ -1449,25 +1483,47 @@ function drawExteriorWalls(ctx: CanvasRenderingContext2D, poly: Point[], thickne
   }
 }
 
-function drawPartition(ctx: CanvasRenderingContext2D, wall: Partition, v: View) {
-  // Bande pleine (emprise placo) par segment.
-  const last = wall.points.length - 2;
-  for (let i = 0; i <= last; i++) {
-    const rect = segmentRect(
-      wall.points[i], wall.points[i + 1], wall.thickness, wall.align, i > 0, i < last,
-    );
+/**
+ * Toutes les cloisons dessinées comme UNE seule masse : on unit leurs emprises (via
+ * `polygon-clipping`), puis on remplit et on contoure le résultat. Les jonctions entre
+ * segments d'une même cloison et entre cloisons différentes se soudent proprement — plus
+ * de couture ni de trait interne là où deux cloisons se touchent.
+ */
+function drawPartitionsUnion(ctx: CanvasRenderingContext2D, parts: Partition[], v: View) {
+  const rings: Ring[] = [];
+  for (const wall of parts) {
+    const last = wall.points.length - 2;
+    for (let i = 0; i <= last; i++) {
+      const rect = segmentRect(
+        wall.points[i], wall.points[i + 1], wall.thickness, wall.align, i > 0, i < last,
+      );
+      rings.push(rect.map((p) => [p.x, p.y] as [number, number]));
+    }
+  }
+  if (rings.length === 0) return;
+
+  const polys = rings.map((r) => [r] as Polygon);
+  let union: MultiPolygon;
+  try {
+    union = polygonClipping.union(polys[0], ...polys.slice(1));
+  } catch {
+    union = polys; // géométrie dégénérée : au pire, on trace sans fusion
+  }
+
+  // Cloison intérieure : noire (convention d'architecte, distincte des murs extérieurs gris).
+  ctx.fillStyle = '#1e293b';
+  ctx.strokeStyle = '#0f172a';
+  ctx.lineWidth = 1;
+  for (const poly of union) {
     ctx.beginPath();
-    rect.forEach((p, k) => {
-      const s = worldToScreen(p, v);
-      if (k === 0) ctx.moveTo(s.x, s.y); else ctx.lineTo(s.x, s.y);
-    });
-    ctx.closePath();
-    // Cloison intérieure : noire, pour la distinguer d'un coup d'œil des murs extérieurs
-    // (gris). C'est la convention des plans d'architecte, celle que suit l'utilisateur.
-    ctx.fillStyle = '#1e293b';
-    ctx.fill();
-    ctx.strokeStyle = '#0f172a';
-    ctx.lineWidth = 1;
+    for (const ring of poly) {
+      ring.forEach(([x, y], k) => {
+        const s = worldToScreen({ x, y }, v);
+        if (k === 0) ctx.moveTo(s.x, s.y); else ctx.lineTo(s.x, s.y);
+      });
+      ctx.closePath();
+    }
+    ctx.fill('evenodd');
     ctx.stroke();
   }
 }

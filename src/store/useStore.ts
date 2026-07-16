@@ -66,6 +66,8 @@ interface State {
   clearPartitions: () => void;
   removePartition: (index: number) => void;
   movePartitionPoint: (partIndex: number, ptIndex: number, p: Point) => void;
+  moveWholePartition: (index: number, dx: number, dy: number) => void;
+  setPartitionLength: (index: number, lengthCm: number) => void;
   removeDoor: (index: number) => void;
   clearRoom: () => void;
   setRoomPoints: (pts: Point[]) => void;
@@ -313,6 +315,28 @@ export const useStore = create<State>((set, get) => ({
     const parts = get().room.partitions.map((w, i) =>
       i === partIndex ? { ...w, points: w.points.map((q, k) => (k === ptIndex ? p : q)) } : w,
     );
+    set({ room: { ...get().room, partitions: parts }, result: null });
+  },
+  moveWholePartition: (index, dx, dy) => {
+    const parts = get().room.partitions.map((w, i) =>
+      i === index ? { ...w, points: w.points.map((q) => ({ x: q.x + dx, y: q.y + dy })) } : w,
+    );
+    set({ room: { ...get().room, partitions: parts }, result: null });
+  },
+  setPartitionLength: (index, lengthCm) => {
+    get().snapshot();
+    const parts = get().room.partitions.map((w, i) => {
+      if (i !== index || w.points.length < 2) return w;
+      // Une seule cote possible pour une cloison à deux points : on déplace l'extrémité
+      // le long de sa direction. (Pour une polyligne, on n'ajuste que le dernier segment.)
+      const pts = [...w.points];
+      const j = pts.length - 1;
+      const a = pts[j - 1], b = pts[j];
+      const cur = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+      const k = lengthCm / cur;
+      pts[j] = { x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k };
+      return { ...w, points: pts };
+    });
     set({ room: { ...get().room, partitions: parts }, result: null });
   },
   removeDoor: (index) => {
