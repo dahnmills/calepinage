@@ -162,8 +162,10 @@ export default function Toolbar() {
               className="grid-step"
               value={editor.gridStep}
               onChange={(e) => setEditor({ gridStep: +e.target.value })}
-              title="Pas de grille (cm)"
+              title="Pas de grille et de tracé (cm)"
             >
+              <option value={1}>1</option>
+              <option value={2}>2</option>
               <option value={5}>5</option>
               <option value={10}>10</option>
               <option value={25}>25</option>
