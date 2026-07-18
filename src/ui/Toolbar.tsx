@@ -1,5 +1,6 @@
 import { useStore, type Tool } from '../store/useStore';
 import type { WallAlign } from '../model/types';
+import NumberField from './NumberField';
 
 /**
  * Barre unique et flottante. Les outils portent leur aide en infobulle : une seconde barre
@@ -53,16 +54,11 @@ export default function Toolbar() {
           <>
             <span className="tb-thick" title="Épaisseur de la cloison, en cm (valeur libre)">
               Épaisseur
-              <input
-                type="number" min={1} step={0.5} list="wall-th" value={editor.wallThickness}
-                onChange={(e) => { const v = +e.target.value; if (v > 0) setEditor({ wallThickness: v }); }}
-                style={{ width: 58 }}
-              />cm
+              <NumberField
+                value={editor.wallThickness} min={0.5} step={0.5} suffix="cm"
+                onChange={(v) => setEditor({ wallThickness: v })}
+              />
             </span>
-            <datalist id="wall-th">
-              <option value={5} /><option value={7} /><option value={10} />
-              <option value={13} /><option value={20} />
-            </datalist>
             <select
               value={editor.wallAlign}
               onChange={(e) => setEditor({ wallAlign: e.target.value as WallAlign })}

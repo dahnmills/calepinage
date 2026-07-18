@@ -6,6 +6,7 @@ import { ghostRows, poseDirection, poseFrame, type GhostRow, type PoseFrame } fr
 import { detectSpaces, spaceCentroid, type Space } from '../model/spaces';
 import { flattenPacks, packIdOf } from '../model/stock';
 import { doorCenter, doorHost, type DoorHost } from '../model/doors';
+import NumberField from '../ui/NumberField';
 import { drawGrid, drawPlank, drawRoomOutline, screenToWorld, worldToScreen, type View } from './draw';
 import {
   snapDrawPoint, snapToGrid, nearestVertex, nearestEdge, projectToSegment, dist, angleDeg, sub,
@@ -965,14 +966,10 @@ export default function CanvasView({ highlightCuts, showNumbers }: { highlightCu
             <div className="muted">Glissez la cloison pour la déplacer, ou une extrémité pour l'étirer.</div>
             <label className="field">
               <span>Épaisseur (cm)</span>
-              <input
-                type="number" min={1} step={0.5} list="wall-th-card" value={w.thickness}
-                onChange={(e) => { const v = +e.target.value; if (v > 0) updatePartition(i, { thickness: v }); }}
+              <NumberField
+                value={w.thickness} min={0.5} step={0.5} suffix="cm"
+                onChange={(v) => { if (v > 0) updatePartition(i, { thickness: v }); }}
               />
-              <datalist id="wall-th-card">
-                <option value={5} /><option value={7} /><option value={10} />
-                <option value={13} /><option value={20} />
-              </datalist>
             </label>
             <label className="field">
               <span>Épaisseur portée</span>
