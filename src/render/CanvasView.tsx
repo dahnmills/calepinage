@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import polygonClipping, { type MultiPolygon, type Polygon, type Ring } from 'polygon-clipping';
 import { useStore } from '../store/useStore';
-import { polygonBBox, pointInPolygon, segmentRect, offsetPolygon } from '../model/geometry';
+import { polygonBBox, pointInPolygon, partitionRects, offsetPolygon } from '../model/geometry';
 import { ghostRows, poseDirection, poseFrame, type GhostRow, type PoseFrame } from '../model/startline';
 import { detectSpaces, spaceCentroid, type Space } from '../model/spaces';
 import { flattenPacks, packIdOf } from '../model/stock';
@@ -1496,16 +1496,9 @@ function drawExteriorWalls(ctx: CanvasRenderingContext2D, poly: Point[], thickne
  * de couture ni de trait interne là où deux cloisons se touchent.
  */
 function drawPartitionsUnion(ctx: CanvasRenderingContext2D, parts: Partition[], v: View) {
-  const rings: Ring[] = [];
-  for (const wall of parts) {
-    const last = wall.points.length - 2;
-    for (let i = 0; i <= last; i++) {
-      const rect = segmentRect(
-        wall.points[i], wall.points[i + 1], wall.thickness, wall.align, i > 0, i < last,
-      );
-      rings.push(rect.map((p) => [p.x, p.y] as [number, number]));
-    }
-  }
+  // Emprises prolongées aux jonctions (partagé avec le calcul de surface) : les coins
+  // entre segments et entre cloisons se recouvrent, l'union ne laisse aucun vide.
+  const rings: Ring[] = partitionRects(parts).map((rect) => rect.map((p) => [p.x, p.y] as [number, number]));
   if (rings.length === 0) return;
 
   const polys = rings.map((r) => [r] as Polygon);

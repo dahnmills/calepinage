@@ -214,13 +214,21 @@ export function segmentRect(
 export function partitionRects(
   partitions: { points: Point[]; thickness: number; align?: WallAlign }[],
 ): Point[][] {
+  // Multiplicité de chaque extrémité : un point partagé par 2+ segments est une JONCTION
+  // (coin d'une polyligne OU deux cloisons qui se rejoignent). On y prolonge les segments
+  // pour que leurs emprises se recouvrent et remplissent le coin. Une extrémité libre
+  // (multiplicité 1) reste franche, sans dépasser dans le vide.
+  const key = (p: Point) => `${Math.round(p.x * 10)},${Math.round(p.y * 10)}`;
+  const count = new Map<string, number>();
+  for (const p of partitions) for (const pt of p.points) count.set(key(pt), (count.get(key(pt)) ?? 0) + 1);
+  const shared = (pt: Point) => (count.get(key(pt)) ?? 0) >= 2;
+
   const rects: Point[][] = [];
   for (const p of partitions) {
     const last = p.points.length - 2;
     for (let i = 0; i <= last; i++) {
-      rects.push(segmentRect(
-        p.points[i], p.points[i + 1], p.thickness, p.align ?? 'center', i > 0, i < last,
-      ));
+      const a = p.points[i], b = p.points[i + 1];
+      rects.push(segmentRect(a, b, p.thickness, p.align ?? 'center', shared(a), shared(b)));
     }
   }
   return rects;
