@@ -14,7 +14,7 @@ const TOOLS: { id: Tool; icon: string; label: string; hint: string }[] = [
   { id: 'door', icon: '🚪', label: 'Porte', hint: 'Cliquer un mur ou une cloison pour y poser une porte' },
   { id: 'hole', icon: '⬚', label: 'Zone exclue', hint: 'Trémie, îlot, cheminée : poser les sommets, puis fermer la zone' },
   { id: 'space', icon: '▦', label: 'Pièces', hint: 'Cliquer une pièce pour la nommer ou l’exclure du parquet' },
-  { id: 'measure', icon: '↔', label: 'Mesurer', hint: 'Deux clics pour coter · Maj = cote bien droite · s’accroche aux murs' },
+  { id: 'measure', icon: '↔', label: 'Mesurer', hint: 'Deux clics pour coter · Maj = cote bien droite · cliquer une cote existante la retire' },
   { id: 'startline', icon: '⇥', label: 'Départ', hint: 'Poser la ligne de départ · clic droit ou Tab pour inverser le sens' },
 ];
 

@@ -45,7 +45,7 @@ export default function CanvasView({ highlightCuts, showNumbers }: { highlightCu
     moveVertex, insertVertex, deleteVertex, setEdgeLength, selectVertex, addDoor, setConfig,
     removePartition, updatePartition, movePartitionPoint, moveWholePartition, setPartitionLength,
     removeDoor, updateDoor,
-    startMeasure, finishMeasure, cancelMeasure,
+    startMeasure, finishMeasure, cancelMeasure, removeMeasure,
     tagSpace,
     snapshot, undo, redo,
   } = useStore();
@@ -574,7 +574,7 @@ export default function CanvasView({ highlightCuts, showNumbers }: { highlightCu
       const p = computePreview(w);
       // La fermeture n'existe que pour un polygone (pièce/zone), pas pour une cloison.
       if (p.closing && tool !== 'wall') { tool === 'hole' ? closeHole() : closeRoom(); setPreview(null); return; }
-      addDrawPoint({ x: Math.round(p.point.x), y: Math.round(p.point.y) });
+      addDrawPoint({ x: Math.round(p.point.x * 10) / 10, y: Math.round(p.point.y * 10) / 10 });
       setOverride({ len: '', ang: '' });
       return;
     }
@@ -586,6 +586,14 @@ export default function CanvasView({ highlightCuts, showNumbers }: { highlightCu
     }
 
     if (tool === 'measure') {
+      // Clic sur une cote existante (près de son étiquette ou de sa ligne) : on la retire.
+      if (!measureStart) {
+        const hit = measures.find((m) => {
+          const mid = { x: (m.a.x + m.b.x) / 2, y: (m.a.y + m.b.y) / 2 };
+          return dist(mid, w) <= vThresh() * 2 || nearestEdge([m.a, m.b], w, vThresh(), false);
+        });
+        if (hit) { removeMeasure(hit.id); return; }
+      }
       if (measureStart) snapshot();
       const p = snapMeasure(w).point;
       const q = { x: Math.round(p.x), y: Math.round(p.y) };
@@ -690,7 +698,7 @@ export default function CanvasView({ highlightCuts, showNumbers }: { highlightCu
 
   const commitDrawFromInput = useCallback(() => {
     const p = computePreview(rawWorld.current);
-    addDrawPoint({ x: Math.round(p.point.x), y: Math.round(p.point.y) });
+    addDrawPoint({ x: Math.round(p.point.x * 10) / 10, y: Math.round(p.point.y * 10) / 10 });
     setOverride({ len: '', ang: '' });
   }, [computePreview, addDrawPoint]);
 
@@ -705,6 +713,9 @@ export default function CanvasView({ highlightCuts, showNumbers }: { highlightCu
         return;
       }
       if (e.code === 'Space') { spaceDown.current = true; return; }
+      // Les raccourcis de zoom (+ - 0) sont désactivés quand on saisit une longueur au
+      // clavier : sinon taper « 40 » déclenche « 0 » = ajuster la vue, et la vue saute.
+      if (isDrawing || tool === 'startline' || tool === 'measure') return;
       if (e.key === '+' || e.key === '=') { const c = center(); zoomAt(c.x, c.y, 1.2); }
       else if (e.key === '-' || e.key === '_') { const c = center(); zoomAt(c.x, c.y, 1 / 1.2); }
       else if (e.key === '0') fit();
@@ -713,7 +724,7 @@ export default function CanvasView({ highlightCuts, showNumbers }: { highlightCu
     window.addEventListener('keydown', down);
     window.addEventListener('keyup', up);
     return () => { window.removeEventListener('keydown', down); window.removeEventListener('keyup', up); };
-  }, [zoomAt, fit, size, undo, redo]);
+  }, [zoomAt, fit, size, undo, redo, isDrawing, tool]);
 
   // --- Clavier ---
   useEffect(() => {
@@ -894,7 +905,7 @@ export default function CanvasView({ highlightCuts, showNumbers }: { highlightCu
           <input
             autoFocus
             value={lenEdit.value}
-            onChange={(e) => setLenEdit({ ...lenEdit, value: e.target.value.replace(/[^0-9.]/g, '') })}
+            onChange={(e) => setLenEdit({ ...lenEdit, value: e.target.value.replace(',', '.').replace(/[^0-9.]/g, '') })}
             onKeyDown={(e) => {
               if (e.key === 'Enter') commitLenEdit();
               if (e.key === 'Escape') setLenEdit(null);

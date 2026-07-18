@@ -45,6 +45,7 @@ interface State {
   finishMeasure: (p: Point) => void;
   cancelMeasure: () => void;
   clearMeasures: () => void;
+  removeMeasure: (id: string) => void;
   setPartitionAlign: (index: number, align: WallAlign) => void;
   updatePartition: (index: number, patch: Partial<Omit<Partition, 'id' | 'points'>>) => void;
   /** Nomme / exclut la pièce contenant ce point. */
@@ -299,6 +300,10 @@ export const useStore = create<State>((set, get) => ({
   clearMeasures: () => {
     get().snapshot();
     set({ measures: [], measureStart: null });
+  },
+  removeMeasure: (id) => {
+    get().snapshot();
+    set({ measures: get().measures.filter((m) => m.id !== id) });
   },
   clearPartitions: () => {
     get().snapshot();
