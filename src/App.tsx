@@ -69,14 +69,14 @@ export default function App() {
 
           <button
             onClick={() => exportProject({ room, packs, config, measures })}
-            title="Enregistrer le projet dans un fichier"
+            title="Enregistrer le plan (murs, cloisons, portes, stock…) dans un fichier .json"
           >
-            💾
+            💾 Exporter
           </button>
-          <label className="file-btn" title="Ouvrir un projet">
-            📂
+          <label className="file-btn" title="Ouvrir un plan enregistré (.json)">
+            📂 Importer
             <input
-              type="file" accept="application/json"
+              type="file" accept="application/json,.json"
               onChange={async (e) => {
                 const f = e.target.files?.[0];
                 e.target.value = '';
@@ -87,9 +87,9 @@ export default function App() {
           </label>
           <button
             onClick={() => { if (confirm('Effacer le plan en cours et repartir de zéro ?')) newProject(); }}
-            title="Nouveau projet"
+            title="Nouveau projet (efface le plan en cours)"
           >
-            ✕
+            ✕ Nouveau
           </button>
         </div>
       </header>
