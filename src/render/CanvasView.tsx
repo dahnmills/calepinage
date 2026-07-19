@@ -83,6 +83,8 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
   const [cursorCm, setCursorCm] = useState<Point | null>(null);
   /** Distance tapée au clavier pour poser la ligne de départ à une cote exacte sur le mur. */
   const [alongInput, setAlongInput] = useState('');
+  /** Saisie clavier de la cote nette (face) pour poser le 1ᵉʳ point d'une cloison sur un mur. */
+  const [wallAlong, setWallAlong] = useState('');
   /** Cote verrouillée sur l'axe (0° / 90°) : garantit une mesure bien droite. */
   const [axisLock, setAxisLock] = useState(false);
   const [pickedPlank, setPickedPlank] = useState<
@@ -242,7 +244,7 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
     return { frame, rows: ghostRows(frame, startShown.point, config.startFlip) };
   }, [startShown, result, frameFor, config.startFlip]);
 
-  useEffect(() => { setAlongInput(''); }, [tool]);
+  useEffect(() => { setAlongInput(''); setWallAlong(''); }, [tool]);
 
   /** Valide la ligne de départ affichée (clic ou Entrée). */
   const commitStartLine = useCallback(() => {
@@ -462,13 +464,32 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
       ...ov,
     });
     // Cloison : on cale la COTE face à face sur le demi-centimètre (pas le point d'axe).
-    // Ainsi on tombe pile sur 299,0 au lieu de 298,8 / 299,1 — c'est la mesure nette qui
-    // compte, pas la position de l'axe (décalée de la demi-épaisseur).
+    // C'est la mesure nette qui compte — on tombe pile sur 299,0 au lieu de 298,8 / 299,1.
     if (tool === 'wall' && !ov.overrideLen) {
-      res.point = snapCloisonGap(res.point, editor.wallThickness, 0.5);
+      res.point = drawing.length === 0
+        ? snapWallFace(res.point, editor.wallThickness, 0.5) // 1ᵉʳ point posé sur un mur
+        : snapCloisonGap(res.point, editor.wallThickness, 0.5);
     }
     return { ...res, hasLast: drawing.length > 0 };
   }, [drawing, editor, override, view.scale, guides, tool]);
+
+  /**
+   * 1ᵉʳ point d'une cloison posé sur un mur : on cale la COTE NETTE (la face de la cloison,
+   * = distance le long du mur − demi-épaisseur) sur un multiple de `step`. Le point d'axe
+   * suit ; ce qu'on lit (299) devient exactement l'écart net une fois posée.
+   */
+  const snapWallFace = (p: Point, thickness: number, step: number): Point => {
+    const off = wallOffsetAt(room.points, p);
+    if (!off) return p;
+    const face = off.along - thickness / 2;
+    const target = Math.round(face / step) * step;
+    const n = room.points.length;
+    const a = room.points[off.edgeIndex], b = room.points[(off.edgeIndex + 1) % n];
+    const l = dist(a, b) || 1;
+    const ux = (b.x - a.x) / l, uy = (b.y - a.y) / l;
+    const alongAxis = target + thickness / 2;
+    return { x: a.x + ux * alongAxis, y: a.y + uy * alongAxis };
+  };
 
   /**
    * Décale le point le long du mur pour que la cote NETTE (face à face) au voisin le plus
@@ -782,6 +803,18 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
     setOverride({ len: '', ang: '' });
   }, [computePreview, addDrawPoint]);
 
+  /** Pose le 1ᵉʳ point d'une cloison à `face` cm (cote nette) du coin du mur sous le curseur. */
+  const commitWallFace = useCallback((face: number) => {
+    const off = wallOffsetAt(room.points, rawWorld.current);
+    if (!off) return;
+    const n = room.points.length;
+    const a = room.points[off.edgeIndex], b = room.points[(off.edgeIndex + 1) % n];
+    const l = dist(a, b) || 1;
+    const ux = (b.x - a.x) / l, uy = (b.y - a.y) / l;
+    const alongAxis = Math.max(0, Math.min(l, face + editor.wallThickness / 2));
+    addDrawPoint({ x: Math.round((a.x + ux * alongAxis) * 10) / 10, y: Math.round((a.y + uy * alongAxis) * 10) / 10 });
+  }, [room.points, editor.wallThickness, addDrawPoint]);
+
   // Navigation : zoom au clavier, pan à la barre d'espace.
   useEffect(() => {
     const center = () => ({ x: size.w / 2, y: size.h / 2 });
@@ -833,6 +866,23 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
         }
         return;
       }
+      // Cloison, 1ᵉʳ point sur un mur : le clavier saisit la cote NETTE (face) au coin.
+      if (tool === 'wall' && drawing.length === 0) {
+        if (/^[0-9.,]$/.test(e.key)) {
+          e.preventDefault();
+          setWallAlong((s) => s + (e.key === ',' ? '.' : e.key));
+          return;
+        }
+        if (e.key === 'Backspace') { e.preventDefault(); setWallAlong((s) => s.slice(0, -1)); return; }
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          const face = parseFloat(wallAlong);
+          if (Number.isFinite(face)) commitWallFace(face);
+          setWallAlong('');
+          return;
+        }
+        if (e.key === 'Escape') { setWallAlong((s) => (s ? '' : (setTool('edit'), s))); return; }
+      }
       if (isDrawing) {
         if (/^[0-9.]$/.test(e.key)) {
           e.preventDefault();
@@ -865,7 +915,7 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [tool, isDrawing, drawing.length, selectedVertex, selectedEl, measureStart, cancelMeasure, undoDrawPoint, clearRoom, setTool, setConfig, closeRoom, closeHole, closePartition, deleteVertex, removePartition, removeDoor, commitDrawFromInput, commitStartLine]);
+  }, [tool, isDrawing, drawing.length, selectedVertex, selectedEl, measureStart, cancelMeasure, undoDrawPoint, clearRoom, setTool, setConfig, closeRoom, closeHole, closePartition, deleteVertex, removePartition, removeDoor, commitDrawFromInput, commitStartLine, wallAlong, commitWallFace]);
 
   const commitLenEdit = () => {
     if (!lenEdit) return;
@@ -897,16 +947,20 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
         style={{ display: 'block', cursor, outline: 'none' }}
       />
 
-      {/* Placement d'un point de cloison sur un mur : distance au coin (comme sur un plan). */}
+      {/* Placement du 1ᵉʳ point d'une cloison sur un mur : cote NETTE au coin, saisissable. */}
       {tool === 'wall' && !preview?.hasLast && preview && (() => {
         const off = wallOffsetAt(room.points, preview.point);
         if (!off) return null;
+        const face = Math.max(0, off.along - editor.wallThickness / 2);
         return (
           <div className="draw-hud">
             <span className="hud-field">
-              Mur {off.edgeIndex + 1} · <b>{Math.round(off.along)}</b> / {Math.round(off.edgeLen)} cm
+              Mur {off.edgeIndex + 1} ·{' '}
+              <b className={wallAlong ? 'typed' : ''}>
+                {wallAlong || (Math.round(face * 10) / 10).toFixed(1)}
+              </b> cm du coin
             </span>
-            <span className="hud-hint">posez le 1ᵉʳ point le long du mur · l'accroche est en vert</span>
+            <span className="hud-hint">tapez une distance + Entrée · c'est la cote nette (face) · Échap annule</span>
           </div>
         );
       })()}
