@@ -26,6 +26,7 @@ function exportPNG() {
 export default function App() {
   const [highlightCuts, setHighlightCuts] = useState(false);
   const [showNumbers, setShowNumbers] = useState(true);
+  const [showGaps, setShowGaps] = useState(true);
   // Les panneaux se replient : sur un plan large, on veut tout l'écran pour le dessin.
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
@@ -51,6 +52,13 @@ export default function App() {
               onChange={(e) => setHighlightCuts(e.target.checked)}
             />
             Surligner les découpes
+          </label>
+          <label className="cut-toggle" title="Cotes automatiques entre cloisons et murs (face à face)">
+            <input
+              type="checkbox" checked={showGaps}
+              onChange={(e) => setShowGaps(e.target.checked)}
+            />
+            Cotes des cloisons
           </label>
 
           <span className="hd-sep" />
@@ -104,7 +112,7 @@ export default function App() {
 
         <main className="center">
           <div className="canvas-wrap">
-            <CanvasView highlightCuts={highlightCuts} showNumbers={showNumbers} />
+            <CanvasView highlightCuts={highlightCuts} showNumbers={showNumbers} showGaps={showGaps} />
             <Toolbar />
 
             {/* La languette ne bouge pas : elle bascule le panneau, ouvert comme fermé. */}

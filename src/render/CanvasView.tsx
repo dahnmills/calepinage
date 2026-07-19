@@ -36,7 +36,7 @@ interface StartLineState {
   wall: StartWall | null;
 }
 
-export default function CanvasView({ highlightCuts, showNumbers }: { highlightCuts: boolean; showNumbers: boolean }) {
+export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { highlightCuts: boolean; showNumbers: boolean; showGaps: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const {
@@ -321,6 +321,10 @@ export default function CanvasView({ highlightCuts, showNumbers }: { highlightCu
       drawPartitionsUnion(ctx, room.partitions, view);
       ctx.restore();
     }
+    // Cotes automatiques : distance nette (face à face) de chaque cloison à son voisin.
+    if (showGaps && room.partitions?.length && !result) {
+      drawPartitionGaps(ctx, room, view);
+    }
     // Portes / ouvertures (murs du périmètre et cloisons).
     for (const d of room.doors ?? []) {
       const host = doorHost(room, d, extT);
@@ -365,7 +369,7 @@ export default function CanvasView({ highlightCuts, showNumbers }: { highlightCu
       if (measureStart) drawMeasure(ctx, measureStart, snap.point, view, true);
       drawSnapMark(ctx, snap, view);
     }
-  }, [size, view, result, room, drawing, highlightCuts, showNumbers, tool, isDrawing, editor, config, preview, hoverVertex, selectedVertex, selectedEl, cursorCm, startShown, startGhost, frameFor, measures, measureStart, snapMeasure, axisLock, spaces, pickedSpace]);
+  }, [size, view, result, room, drawing, highlightCuts, showNumbers, showGaps, tool, isDrawing, editor, config, preview, hoverVertex, selectedVertex, selectedEl, cursorCm, startShown, startGhost, frameFor, measures, measureStart, snapMeasure, axisLock, spaces, pickedSpace]);
 
   // Pose d'une porte : sur le mur OU la cloison la plus proche, la plus proche gagne.
   const placeDoor = (w: Point) => {
@@ -1674,6 +1678,89 @@ function drawDims(
     ctx.fillStyle = '#1d4ed8';
     ctx.fillText(txt, sx, sy);
   }
+}
+
+/** Intersection d'un rayon (origine `o`, direction unitaire `d`) avec le segment [a,b]. Distance ou ∞. */
+function rayHitSeg(o: Point, d: Point, a: Point, b: Point): number {
+  const sx = b.x - a.x, sy = b.y - a.y;
+  const denom = d.x * sy - d.y * sx;
+  if (Math.abs(denom) < 1e-9) return Infinity; // parallèle
+  const t = ((a.x - o.x) * sy - (a.y - o.y) * sx) / denom; // le long du rayon
+  const u = ((a.x - o.x) * d.y - (a.y - o.y) * d.x) / denom; // le long du segment
+  if (t <= 0.01 || u < -1e-6 || u > 1 + 1e-6) return Infinity;
+  return t;
+}
+
+/**
+ * Cotes automatiques entre cloisons — comme Casaplan. Depuis chaque face d'une cloison, on
+ * lance un rayon perpendiculaire jusqu'au voisin le plus proche (mur du périmètre ou autre
+ * cloison) et on affiche la distance NETTE, face à face, épaisseurs déduites. On suit ainsi
+ * en direct l'écart d'une cloison à l'autre, et il se met à jour quand on la déplace.
+ */
+function drawPartitionGaps(ctx: CanvasRenderingContext2D, room: Room, v: View) {
+  // Obstacles : faces intérieures du périmètre + faces de toutes les cloisons.
+  const obstacles: [Point, Point][] = [];
+  const n = room.points.length;
+  for (let i = 0; i < n; i++) obstacles.push([room.points[i], room.points[(i + 1) % n]]);
+  const partRects = partitionRects(room.partitions);
+  for (const r of partRects) for (let i = 0; i < r.length; i++) obstacles.push([r[i], r[(i + 1) % r.length]]);
+
+  ctx.save();
+  ctx.font = '600 11px system-ui';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  let ri = 0;
+  for (const wall of room.partitions) {
+    for (let si = 0; si < wall.points.length - 1; si++) {
+      const rect = partRects[ri++];
+      if (!rect) continue;
+      const a = wall.points[si], b = wall.points[si + 1];
+      const len = Math.hypot(b.x - a.x, b.y - a.y);
+      if (len < 1) continue;
+      const ux = (b.x - a.x) / len, uy = (b.y - a.y) / len;
+      const nx = -uy, ny = ux; // normale gauche
+      // Les faces sont les deux longs côtés du rectangle : côtés 0-1 et 2-3.
+      const faceMid = (i: number, j: number) => ({ x: (rect[i].x + rect[j].x) / 2, y: (rect[i].y + rect[j].y) / 2 });
+      const sides = [
+        { face: faceMid(0, 1), dir: { x: nx, y: ny } },
+        { face: faceMid(2, 3), dir: { x: -nx, y: -ny } },
+      ];
+      // On ignore les faces de CETTE cloison pour ne pas se mesurer à soi-même.
+      const own = new Set(partRects.slice(ri - 1, ri).flatMap((r) => r.map((p) => `${Math.round(p.x)},${Math.round(p.y)}`)));
+
+      for (const { face, dir } of sides) {
+        let best = Infinity;
+        for (const [oa, ob] of obstacles) {
+          if (own.has(`${Math.round(oa.x)},${Math.round(oa.y)}`) && own.has(`${Math.round(ob.x)},${Math.round(ob.y)}`)) continue;
+          const t = rayHitSeg(face, dir, oa, ob);
+          if (t < best) best = t;
+        }
+        if (!Number.isFinite(best) || best < 1 || best > 2000) continue;
+        // Un peu à l'écart du milieu du mur, pour ne pas superposer les deux cotes opposées.
+        const off = 0; // sur l'axe de la cote
+        const o = { x: face.x + ux * off, y: face.y + uy * off };
+        const hit = { x: o.x + dir.x * best, y: o.y + dir.y * best };
+        const s0 = worldToScreen(o, v), s1 = worldToScreen(hit, v);
+        ctx.strokeStyle = 'rgba(180,83,9,0.8)';
+        ctx.fillStyle = '#9a3412';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 3]);
+        ctx.beginPath(); ctx.moveTo(s0.x, s0.y); ctx.lineTo(s1.x, s1.y); ctx.stroke();
+        ctx.setLineDash([]);
+        const txt = `${Math.round(best)}`;
+        const mx = (s0.x + s1.x) / 2, my = (s0.y + s1.y) / 2;
+        const w = ctx.measureText(txt).width + 8;
+        ctx.fillStyle = '#fff7ed';
+        ctx.strokeStyle = 'rgba(180,83,9,0.6)';
+        roundRect(ctx, mx - w / 2, my - 8, w, 16, 4);
+        ctx.fill(); ctx.stroke();
+        ctx.fillStyle = '#9a3412';
+        ctx.fillText(txt, mx, my + 0.5);
+      }
+    }
+  }
+  ctx.restore();
 }
 
 /** Cotes d'une cloison : longueur de chaque segment, en gris foncé (couleur des cloisons). */
