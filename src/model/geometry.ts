@@ -248,8 +248,18 @@ export function partitionRects(
   for (const p of partitions) {
     const pts = dedupePoints(p.points);
     const t = p.thickness;
-    const align = p.align ?? 'center';
-    const near = align === 'center' ? -t / 2 : align === 'left' ? -t : 0;
+    // Côté de l'épaisseur : on la porte vers le CREUX de la polyligne (le côté concave),
+    // pour que les dimensions extérieures = les longueurs tracées (une cloison en L de
+    // 60×30 encombre 60×30, on n'ajoute pas l'épaisseur du bras perpendiculaire). Le côté
+    // dépend du sens de tracé : on le déduit de l'aire signée. Cloison droite (aire ~0) :
+    // pas de creux, on garde le réglage choisi (défaut = une face, jamais l'axe milieu).
+    let area = 0;
+    for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+      area += (pts[j].x + pts[i].x) * (pts[j].y - pts[i].y);
+    }
+    const align: WallAlign = Math.abs(area) < 1e-6 ? (p.align === 'right' ? 'right' : 'left')
+      : area > 0 ? 'left' : 'right';
+    const near = align === 'left' ? -t : 0;
     const far = near + t;
     for (let i = 0; i < pts.length - 1; i++) {
       rects.push(segmentRect(pts[i], pts[i + 1], t, align, false, false));
