@@ -1679,56 +1679,65 @@ function drawSelection(
 function drawExteriorWalls(ctx: CanvasRenderingContext2D, poly: Point[], thickness: number, v: View) {
   const n = poly.length;
   if (n < 3 || thickness <= 0) return;
-  // `poly` est le nu intérieur : l'épaisseur part entièrement vers l'extérieur. On construit
-  // la bande comme l'UNION d'un rectangle par arête (porté vers l'extérieur), au lieu d'un
-  // polygone décalé « en onglet ». L'onglet (offsetPolygon) fait fuir le sommet à l'infini
-  // aux angles aigus/rentrants (encoches), d'où les pointes géométriques parasites ; l'union
-  // de rectangles reste franche quelle que soit la forme.
+  // `poly` = nu intérieur ; l'épaisseur part vers l'extérieur. La face extérieure est le
+  // décalage de `poly` par `thickness`. Aux angles, on joint en ONGLET (intersection des
+  // deux droites décalées) — coin franc, pile sur le vrai coin, sans débord tangentiel.
+  // MAIS l'onglet fuit à l'infini sur un angle aigu (le sommet part très loin) : on le
+  // PLAFONNE (miterLimit) et on retombe sur un chanfrein (deux points) au-delà. D'où : ni
+  // pointe parasite aux angles aigus, ni ergot qui dépasse aux nœuds.
   const eps = 0.01;
-  const rects: Point[][] = [];
-  for (let i = 0; i < n; i++) {
-    const a = poly[i], b = poly[(i + 1) % n];
+  const miterLimit = 2.5; // au-delà, on chanfreine plutôt que de laisser filer la pointe
+  // Décalage extérieur de chaque arête : point de départ décalé + direction unitaire.
+  const seg = poly.map((a, i) => {
+    const b = poly[(i + 1) % n];
     const dx = b.x - a.x, dy = b.y - a.y;
     const l = Math.hypot(dx, dy) || 1;
-    const ux = dx / l, uy = dy / l;
-    let nx = -uy, ny = ux; // normale gauche
+    const dir = { x: dx / l, y: dy / l };
+    let nrm = { x: -dir.y, y: dir.x };
     const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-    // On veut la normale EXTÉRIEURE : si l'intérieur du polygone est de ce côté, on l'inverse.
-    if (pointInPolygon({ x: mid.x + nx * eps, y: mid.y + ny * eps }, poly)) { nx = -nx; ny = -ny; }
-    // Rallonge tangentielle aux deux bouts pour souder les coins (le périmètre est fermé,
-    // donc aucune extrémité libre) : les rectangles voisins se recouvrent, pas de vide au coin.
-    const ex = ux * thickness, ey = uy * thickness;
-    const a2 = { x: a.x - ex, y: a.y - ey }, b2 = { x: b.x + ex, y: b.y + ey };
-    rects.push([
-      { x: a2.x, y: a2.y },
-      { x: b2.x, y: b2.y },
-      { x: b2.x + nx * thickness, y: b2.y + ny * thickness },
-      { x: a2.x + nx * thickness, y: a2.y + ny * thickness },
-    ]);
+    if (pointInPolygon({ x: mid.x + nrm.x * eps, y: mid.y + nrm.y * eps }, poly)) nrm = { x: -nrm.x, y: -nrm.y };
+    return { A: { x: a.x + nrm.x * thickness, y: a.y + nrm.y * thickness }, B: { x: b.x + nrm.x * thickness, y: b.y + nrm.y * thickness }, dir };
+  });
+  const lineX = (p1: Point, d1: Point, p2: Point, d2: Point): Point | null => {
+    const den = d1.x * d2.y - d1.y * d2.x;
+    if (Math.abs(den) < 1e-9) return null; // arêtes ~parallèles
+    const t = ((p2.x - p1.x) * d2.y - (p2.y - p1.y) * d2.x) / den;
+    return { x: p1.x + d1.x * t, y: p1.y + d1.y * t };
+  };
+  const outer: Point[] = [];
+  for (let i = 0; i < n; i++) {
+    const prev = seg[(i + n - 1) % n], cur = seg[i];
+    const v0 = poly[i];
+    const m = lineX(prev.B, prev.dir, cur.A, cur.dir);
+    if (m && Math.hypot(m.x - v0.x, m.y - v0.y) <= miterLimit * thickness) {
+      outer.push(m); // onglet franc
+    } else {
+      outer.push(prev.B); outer.push(cur.A); // chanfrein : borne la pointe
+    }
   }
 
-  const rings: Ring[] = rects.map((r) => r.map((p) => [p.x, p.y] as [number, number]));
-  const polys = rings.map((r) => [r] as Polygon);
-  let union: MultiPolygon;
-  try {
-    union = polygonClipping.union(polys[0], ...polys.slice(1));
-  } catch {
-    union = polys;
-  }
+  const trace = (pts: Point[], reverse: boolean) => {
+    const list = reverse ? [...pts].reverse() : pts;
+    list.forEach((p, i) => {
+      const s = worldToScreen(p, v);
+      if (i === 0) ctx.moveTo(s.x, s.y); else ctx.lineTo(s.x, s.y);
+    });
+    ctx.closePath();
+  };
 
+  // Anneau plein : contour extérieur + contour intérieur en sens inverse (even-odd).
+  ctx.beginPath();
+  trace(outer, false);
+  trace(poly, true);
   ctx.fillStyle = '#b8c0cc';
+  ctx.fill('evenodd');
+
+  // Faces franches.
   ctx.strokeStyle = '#64748b';
   ctx.lineWidth = 1;
-  for (const p of union) {
+  for (const face of [outer, poly]) {
     ctx.beginPath();
-    for (const ring of p) {
-      ring.forEach(([x, y], k) => {
-        const s = worldToScreen({ x, y }, v);
-        if (k === 0) ctx.moveTo(s.x, s.y); else ctx.lineTo(s.x, s.y);
-      });
-      ctx.closePath();
-    }
-    ctx.fill('evenodd');
+    trace(face, false);
     ctx.stroke();
   }
 }
