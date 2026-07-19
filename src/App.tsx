@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import CanvasView from './render/CanvasView';
+import ErrorBoundary from './ui/ErrorBoundary';
 import Toolbar from './ui/Toolbar';
 import StockPanel from './ui/StockPanel';
 import ConfigPanel from './ui/ConfigPanel';
@@ -112,7 +113,9 @@ export default function App() {
 
         <main className="center">
           <div className="canvas-wrap">
-            <CanvasView highlightCuts={highlightCuts} showNumbers={showNumbers} showGaps={showGaps} />
+            <ErrorBoundary>
+              <CanvasView highlightCuts={highlightCuts} showNumbers={showNumbers} showGaps={showGaps} />
+            </ErrorBoundary>
             <Toolbar />
 
             {/* La languette ne bouge pas : elle bascule le panneau, ouvert comme fermé. */}

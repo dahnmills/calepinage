@@ -331,6 +331,8 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
     ctx.fillStyle = '#f8fafc';
     ctx.fillRect(0, 0, size.w, size.h);
 
+    try {
+
     if (editor.showGrid && (isDrawing || tool === 'edit')) {
       drawGrid(ctx, view, size.w, size.h, editor.gridStep);
     }
@@ -445,6 +447,11 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
       const snap = snapMeasure(cursorCm);
       if (measureStart) drawMeasure(ctx, measureStart, snap.point, view, true);
       drawSnapMark(ctx, snap, view);
+    }
+    } catch (err) {
+      // Une frame qui échoue (géométrie dégénérée le temps d'un tracé) ne doit pas tuer
+      // l'app : on logge et on laisse le prochain rendu repartir proprement.
+      console.error('[calepinage] échec de rendu du plan :', err);
     }
   }, [size, view, result, room, drawing, highlightCuts, showNumbers, showGaps, tool, isDrawing, editor, config, preview, hoverVertex, selectedVertex, selectedEl, cursorCm, startShown, startGhost, frameFor, measures, measureStart, snapMeasure, axisLock, spaces, pickedSpace]);
 
