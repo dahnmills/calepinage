@@ -1,5 +1,6 @@
 import { useStore } from '../store/useStore';
 import { PATTERNS } from '../model/patterns';
+import NumberField from './NumberField';
 import type { OffsetMode } from '../model/types';
 
 /** Angle (mod 180) de la plus longue arête de la pièce : sens de pose "dans la longueur". */
@@ -82,43 +83,30 @@ export default function ConfigPanel() {
 
       <label className="field">
         <span>Jeu de joint (cm)</span>
-        <input
-          type="number" min={0} step={0.1} value={config.jointGap}
-          onChange={(e) => setConfig({ jointGap: +e.target.value })}
-        />
+        <NumberField min={0} step={0.1} value={config.jointGap} onChange={(v) => setConfig({ jointGap: v })} />
       </label>
 
       <label className="field">
         <span>Épaisseur murs extérieurs (cm)</span>
-        <input
-          type="number" min={0} step={1} value={config.exteriorWallThickness}
-          onChange={(e) => setConfig({ exteriorWallThickness: +e.target.value })}
-        />
+        <NumberField min={0} step={0.5} value={config.exteriorWallThickness} onChange={(v) => setConfig({ exteriorWallThickness: v })} />
       </label>
 
       <label className="field">
         <span>Jeu de dilatation périmétrique (cm)</span>
-        <input
-          type="number" min={0} step={0.1} value={config.expansionGap}
-          onChange={(e) => setConfig({ expansionGap: +e.target.value })}
-        />
+        <NumberField min={0} step={0.1} value={config.expansionGap} onChange={(v) => setConfig({ expansionGap: v })} />
       </label>
 
       <label className="field">
         <span>Décalage mini des joints (cm)</span>
-        <input
-          type="number" min={0} step={1} value={config.minJointOffset}
-          onChange={(e) => setConfig({ minJointOffset: +e.target.value })}
+        <NumberField
+          min={0} step={1} value={config.minJointOffset} onChange={(v) => setConfig({ minJointOffset: v })}
           title="Écart minimal entre les joints de deux rangées voisines. Des joints alignés sont laids et affaiblissent le plancher : 30 cm est l'usage."
         />
       </label>
 
       <label className="field">
         <span>Longueur mini de coupe (cm)</span>
-        <input
-          type="number" min={0} value={config.minCutLength}
-          onChange={(e) => setConfig({ minCutLength: +e.target.value })}
-        />
+        <NumberField min={0} step={0.5} value={config.minCutLength} onChange={(v) => setConfig({ minCutLength: v })} />
       </label>
 
       <label className="field checkbox">
@@ -131,9 +119,8 @@ export default function ConfigPanel() {
 
       <label className="field">
         <span>Tolérance de coupe (cm)</span>
-        <input
-          type="number" min={0} step={0.1} value={config.cutTolerance}
-          onChange={(e) => setConfig({ cutTolerance: +e.target.value })}
+        <NumberField
+          min={0} step={0.1} value={config.cutTolerance} onChange={(v) => setConfig({ cutTolerance: v })}
           title="En deçà, on ne coupe pas : la lame est posée pleine et mord d'autant sur le jeu de dilatation."
         />
       </label>
@@ -179,10 +166,7 @@ export default function ConfigPanel() {
       {config.offsetMode === 'random' && (
         <label className="field">
           <span>Graine (aléatoire)</span>
-          <input
-            type="number" value={config.seed}
-            onChange={(e) => setConfig({ seed: +e.target.value })}
-          />
+          <NumberField min={0} step={1} value={config.seed} onChange={(v) => setConfig({ seed: Math.round(v) })} />
         </label>
       )}
     </section>

@@ -214,7 +214,7 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
       // Loin de tout appui : la ligne suit le curseur au centimètre. La grille la ferait
       // sauter par pas de 10 cm, ce qui rend le geste heurté pour rien.
       return {
-        point: { x: Math.round(w.x), y: Math.round(w.y) },
+        point: { x: Math.round(w.x * 10) / 10, y: Math.round(w.y * 10) / 10 },
         orientationDeg: config.orientationDeg,
         preview: true,
         wall: null,
@@ -602,13 +602,13 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
     // Glisser un sommet (édition).
     if (draggingVertex.current >= 0) {
       const snapped = editor.snapGrid ? snapToGrid(w, editor.gridStep) : w;
-      moveVertex(draggingVertex.current, { x: Math.round(snapped.x), y: Math.round(snapped.y) });
+      moveVertex(draggingVertex.current, { x: Math.round(snapped.x * 10) / 10, y: Math.round(snapped.y * 10) / 10 });
       return;
     }
     // Glisser une extrémité de cloison.
     if (draggingPart.current) {
       const snapped = editor.snapGrid ? snapToGrid(w, editor.gridStep) : w;
-      movePartitionPoint(draggingPart.current.pi, draggingPart.current.ki, { x: Math.round(snapped.x), y: Math.round(snapped.y) });
+      movePartitionPoint(draggingPart.current.pi, draggingPart.current.ki, { x: Math.round(snapped.x * 10) / 10, y: Math.round(snapped.y * 10) / 10 });
       return;
     }
     // Déplacer une cloison entière : translation de tous ses points, calée à la grille.
@@ -751,7 +751,7 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
     const edge = nearestEdge(room.points, w, vThresh() * 1.5);
     if (edge) {
       const snapped = editor.snapGrid ? snapToGrid(edge.point, editor.gridStep) : edge.point;
-      insertVertex(edge.index, { x: Math.round(snapped.x), y: Math.round(snapped.y) });
+      insertVertex(edge.index, { x: Math.round(snapped.x * 10) / 10, y: Math.round(snapped.y * 10) / 10 });
     }
   };
 
@@ -1100,12 +1100,12 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
             </div>
             <label className="field">
               <span>Longueur {w.points.length > 2 ? '(dernier segment)' : ''} (cm)</span>
-              <input
-                type="number" min={1} step={1}
-                value={Math.round(w.points.length > 2
+              <NumberField
+                min={1} step={0.5} suffix="cm"
+                value={+(w.points.length > 2
                   ? dist(w.points[w.points.length - 2], w.points[w.points.length - 1])
-                  : len)}
-                onChange={(e) => { const v = +e.target.value; if (v > 0) setPartitionLength(i, v); }}
+                  : len).toFixed(1)}
+                onChange={(v) => { if (v > 0) setPartitionLength(i, v); }}
               />
             </label>
             <div className="muted">Glissez la cloison pour la déplacer, ou une extrémité pour l'étirer.</div>
@@ -1139,9 +1139,9 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
             <div className="muted">Glissez la porte pour la déplacer sur son mur.</div>
             <label className="field">
               <span>Largeur du passage (cm)</span>
-              <input
-                type="number" min={40} step={1} value={d.width}
-                onChange={(e) => updateDoor(i, { width: Math.max(10, +e.target.value) })}
+              <NumberField
+                min={10} step={0.5} suffix="cm" value={+d.width.toFixed(1)}
+                onChange={(v) => updateDoor(i, { width: Math.max(10, v) })}
               />
             </label>
             {(() => {
@@ -1151,10 +1151,10 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
               return (
                 <label className="field">
                   <span>Position sur le mur (cm)</span>
-                  <input
-                    type="number" min={0} step={1} value={Math.round(d.center * len)}
-                    onChange={(e) => {
-                      const along = Math.max(0, Math.min(len, +e.target.value));
+                  <NumberField
+                    min={0} step={0.5} suffix="cm" value={+(d.center * len).toFixed(1)}
+                    onChange={(v) => {
+                      const along = Math.max(0, Math.min(len, v));
                       updateDoor(i, { center: len > 0 ? along / len : 0.5 });
                     }}
                   />
