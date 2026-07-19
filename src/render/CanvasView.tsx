@@ -43,7 +43,8 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
     tool, room, drawing, result, editor, selectedVertex, config, packs, measures, measureStart,
     addDrawPoint, undoDrawPoint, closeRoom, closeHole, closePartition, clearRoom, setTool,
     moveVertex, insertVertex, deleteVertex, setEdgeLength, selectVertex, addDoor, setConfig,
-    removePartition, updatePartition, movePartitionPoint, moveWholePartition, setPartitionLength,
+    removePartition, updatePartition, movePartitionPoint, moveWholePartition,
+    setPartitionSegmentLength,
     removeDoor, updateDoor,
     startMeasure, finishMeasure, cancelMeasure, removeMeasure,
     tagSpace,
@@ -104,7 +105,7 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
   const draggingDoor = useRef<number>(-1);
   /** Cloison déplacée en bloc : index + position du curseur au début du glissement. */
   const draggingWholePart = useRef<{ index: number; from: Point } | null>(null);
-  const [selectedEl, setSelectedEl] = useState<{ type: 'partition' | 'door'; index: number } | null>(null);
+  const [selectedEl, setSelectedEl] = useState<{ type: 'partition' | 'door'; index: number; seg?: number } | null>(null);
   const rawWorld = useRef<Point>({ x: 0, y: 0 });
   const edgeLabels = useRef<EdgeLabel[]>([]);
   const fittedRef = useRef(false);
@@ -427,12 +428,17 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
         if (dist(parts[pi].points[ki], w) <= vThresh()) return { pi, ki };
     return null;
   };
-  // Segment de cloison proche (pour sélectionner).
-  const partitionSegHit = (w: Point): number => {
+  // Cloison sous le curseur (index), pour le survol.
+  const partitionSegHit = (w: Point): number => partitionSegAt(w)?.pi ?? -1;
+  // Segment PRÉCIS d'une cloison sous le curseur : on sélectionne le segment isolé.
+  const partitionSegAt = (w: Point): { pi: number; seg: number } | null => {
     const parts = room.partitions ?? [];
-    for (let pi = 0; pi < parts.length; pi++)
-      if (nearestEdge(parts[pi].points, w, vThresh() * 1.5, false)) return pi;
-    return -1;
+    let best: { pi: number; seg: number; d: number } | null = null;
+    for (let pi = 0; pi < parts.length; pi++) {
+      const hit = nearestEdge(parts[pi].points, w, vThresh() * 1.5, false);
+      if (hit && (!best || hit.d < best.d)) best = { pi, seg: hit.index, d: hit.d };
+    }
+    return best ? { pi: best.pi, seg: best.seg } : null;
   };
   const doorHit = (w: Point): number => {
     const doors = room.doors ?? [];
@@ -559,11 +565,11 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
       const pep = partitionEndpointHit(w);
       if (pep) { snapshot(); draggingPart.current = pep; setSelectedEl({ type: 'partition', index: pep.pi }); selectVertex(null); return; }
       // Corps d'une cloison (hors extrémité) : on la déplace en bloc.
-      const pseg = partitionSegHit(w);
-      if (pseg >= 0) {
+      const pseg = partitionSegAt(w);
+      if (pseg) {
         snapshot();
-        draggingWholePart.current = { index: pseg, from: { x: w.x, y: w.y } };
-        setSelectedEl({ type: 'partition', index: pseg }); selectVertex(null); setPickedPlank(null);
+        draggingWholePart.current = { index: pseg.pi, from: { x: w.x, y: w.y } };
+        setSelectedEl({ type: 'partition', index: pseg.pi, seg: pseg.seg }); selectVertex(null); setPickedPlank(null);
         return;
       }
     }
@@ -721,8 +727,8 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
       // Sélection d'une cloison ou d'une porte.
       const di = doorHit(w);
       if (di >= 0) { setSelectedEl({ type: 'door', index: di }); selectVertex(null); setPickedPlank(null); return; }
-      const pi = partitionSegHit(w);
-      if (pi >= 0) { setSelectedEl({ type: 'partition', index: pi }); selectVertex(null); setPickedPlank(null); return; }
+      const pseg = partitionSegAt(w);
+      if (pseg) { setSelectedEl({ type: 'partition', index: pseg.pi, seg: pseg.seg }); selectVertex(null); setPickedPlank(null); return; }
       // Clic ailleurs : désélection.
       setSelectedEl(null);
       if (nearestVertex(room.points, w, vThresh()) < 0) selectVertex(null);
@@ -1085,29 +1091,31 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
         );
       })()}
 
-      {/* Cloison sélectionnée : la modifier ou la supprimer */}
+      {/* Cloison sélectionnée : on édite le SEGMENT cliqué, longueur au dixième de cm. */}
       {tool === 'edit' && selectedEl?.type === 'partition' && room.partitions[selectedEl.index] && (() => {
         const i = selectedEl.index;
         const w = room.partitions[i];
-        const len = w.points.reduce(
-          (s, p, k) => (k === 0 ? 0 : s + dist(w.points[k - 1], p)), 0,
-        );
+        const nSeg = w.points.length - 1;
+        const seg = Math.min(selectedEl.seg ?? nSeg - 1, nSeg - 1);
+        const segLen = seg >= 0 && seg + 1 < w.points.length
+          ? dist(w.points[seg], w.points[seg + 1]) : 0;
+        const total = w.points.reduce((s, p, k) => (k === 0 ? 0 : s + dist(w.points[k - 1], p)), 0);
         return (
           <div className="door-card">
             <div className="pc-head">
-              <b>Cloison {i + 1}</b>
+              <b>Cloison {i + 1}{nSeg > 1 ? ` · segment ${seg + 1}/${nSeg}` : ''}</b>
               <button onClick={() => setSelectedEl(null)}>✕</button>
             </div>
             <label className="field">
-              <span>Longueur {w.points.length > 2 ? '(dernier segment)' : ''} (cm)</span>
+              <span>Longueur du segment (cm)</span>
               <NumberField
-                min={1} step={0.5} suffix="cm"
-                value={+(w.points.length > 2
-                  ? dist(w.points[w.points.length - 2], w.points[w.points.length - 1])
-                  : len).toFixed(1)}
-                onChange={(v) => { if (v > 0) setPartitionLength(i, v); }}
+                min={0.1} step={0.1} suffix="cm" value={+segLen.toFixed(1)}
+                onChange={(v) => { if (v > 0) setPartitionSegmentLength(i, seg, v); }}
               />
             </label>
+            {nSeg > 1 && (
+              <div className="muted">Longueur totale : {Math.round(total * 10) / 10} cm · cliquez un autre segment pour le modifier.</div>
+            )}
             <div className="muted">Glissez la cloison pour la déplacer, ou une extrémité pour l'étirer.</div>
             <label className="field">
               <span>Épaisseur (cm)</span>
@@ -1547,7 +1555,7 @@ function drawPartitionHandles(ctx: CanvasRenderingContext2D, parts: Partition[],
 function drawSelection(
   ctx: CanvasRenderingContext2D,
   room: Room,
-  sel: { type: 'partition' | 'door'; index: number } | null,
+  sel: { type: 'partition' | 'door'; index: number; seg?: number } | null,
   v: View,
   wallThickness: number,
 ) {
@@ -1557,19 +1565,26 @@ function drawSelection(
   if (sel.type === 'partition') {
     const wpart = room.partitions[sel.index];
     if (!wpart || wpart.points.length < 2) return;
+    const nSeg = wpart.points.length - 1;
+    const seg = sel.seg != null ? Math.min(sel.seg, nSeg - 1) : -1;
     ctx.save();
-    // Axe de la cloison en surbrillance : on saisit d'un coup d'œil laquelle est prise.
-    ctx.strokeStyle = '#0f9488';
-    ctx.lineWidth = Math.max(5, wpart.thickness * v.scale);
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    ctx.globalAlpha = 0.85;
+    // Toute la cloison en léger surlignage, et le SEGMENT sélectionné bien marqué.
+    ctx.strokeStyle = '#0f9488';
+    ctx.lineWidth = Math.max(5, wpart.thickness * v.scale);
+    ctx.globalAlpha = seg >= 0 ? 0.3 : 0.85;
     ctx.beginPath();
     wpart.points.forEach((p, i) => {
       const s = worldToScreen(p, v);
       if (i === 0) ctx.moveTo(s.x, s.y); else ctx.lineTo(s.x, s.y);
     });
     ctx.stroke();
+    if (seg >= 0) {
+      ctx.globalAlpha = 0.95;
+      const a = worldToScreen(wpart.points[seg], v), b = worldToScreen(wpart.points[seg + 1], v);
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    }
     ctx.globalAlpha = 1;
 
     // Poignées : ce sont elles qu'on attrape pour étirer la cloison.

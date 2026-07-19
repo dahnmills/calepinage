@@ -69,6 +69,8 @@ interface State {
   movePartitionPoint: (partIndex: number, ptIndex: number, p: Point) => void;
   moveWholePartition: (index: number, dx: number, dy: number) => void;
   setPartitionLength: (index: number, lengthCm: number) => void;
+  /** Change la longueur d'UN segment : déplace son extrémité et translate la suite de la polyligne. */
+  setPartitionSegmentLength: (index: number, seg: number, lengthCm: number) => void;
   removeDoor: (index: number) => void;
   clearRoom: () => void;
   setRoomPoints: (pts: Point[]) => void;
@@ -326,6 +328,23 @@ export const useStore = create<State>((set, get) => ({
     const parts = get().room.partitions.map((w, i) =>
       i === index ? { ...w, points: w.points.map((q) => ({ x: q.x + dx, y: q.y + dy })) } : w,
     );
+    set({ room: { ...get().room, partitions: parts }, result: null });
+  },
+  setPartitionSegmentLength: (index, seg, lengthCm) => {
+    get().snapshot();
+    const parts = get().room.partitions.map((w, i) => {
+      if (i !== index || seg < 0 || seg + 1 >= w.points.length) return w;
+      const pts = [...w.points];
+      const a = pts[seg], b = pts[seg + 1];
+      const cur = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+      const ux = (b.x - a.x) / cur, uy = (b.y - a.y) / cur;
+      const nb = { x: a.x + ux * lengthCm, y: a.y + uy * lengthCm };
+      // On translate l'extrémité ET toute la suite de la polyligne, pour ne changer QUE la
+      // longueur de ce segment sans déformer les suivants.
+      const dx = nb.x - b.x, dy = nb.y - b.y;
+      for (let k = seg + 1; k < pts.length; k++) pts[k] = { x: pts[k].x + dx, y: pts[k].y + dy };
+      return { ...w, points: pts };
+    });
     set({ room: { ...get().room, partitions: parts }, result: null });
   },
   setPartitionLength: (index, lengthCm) => {
