@@ -1686,7 +1686,7 @@ function drawExteriorWalls(ctx: CanvasRenderingContext2D, poly: Point[], thickne
   // PLAFONNE (miterLimit) et on retombe sur un chanfrein (deux points) au-delà. D'où : ni
   // pointe parasite aux angles aigus, ni ergot qui dépasse aux nœuds.
   const eps = 0.01;
-  const miterLimit = 2.5; // au-delà, coin chanfreiné plutôt que pointe qui file
+  const miterLimit = 3; // au-delà, coin chanfreiné plutôt que pointe qui file
   // Décalage extérieur de chaque arête (A,B = extrémités décalées, dir = sens de l'arête).
   const seg = poly.map((a, i) => {
     const b = poly[(i + 1) % n];
@@ -1709,31 +1709,26 @@ function drawExteriorWalls(ctx: CanvasRenderingContext2D, poly: Point[], thickne
     return { x: p1.x + d1.x * t, y: p1.y + d1.y * t };
   };
 
-  // La bande = union (polygon-clipping) des rectangles d'arête + un coin de remblai par
-  // sommet. Pas d'extension tangentielle (donc aucun ergot au nœud), et le coin ferme le
-  // vide extérieur des jonctions : onglet CARRÉ quand le coin pointe vers l'extérieur
-  // (convexe), chanfrein (triangle) sinon — jamais de trou, jamais de pointe qui file.
-  const parts: Point[][] = [];
-  for (let i = 0; i < n; i++) parts.push([seg[i].a, seg[i].b, seg[i].B, seg[i].A]);
+  // La bande = DIFFÉRENCE(anneau extérieur, nu intérieur). Une seule région pleine par
+  // construction : impossible d'avoir un décrochage entre deux murs, la face intérieure
+  // EST `poly` au trait près, la face extérieure est l'anneau décalé. Aux angles, l'anneau
+  // joint en ONGLET (intersection des deux arêtes décalées) — coin carré franc ; au-delà
+  // du miterLimit (angles aigus) on retombe sur un chanfrein (deux points), jamais de pointe.
+  const outer: Point[] = [];
   for (let i = 0; i < n; i++) {
     const prev = seg[(i + n - 1) % n], cur = seg[i];
-    const V = poly[i], P1 = prev.B, P2 = cur.A;
-    const m = lineX(P1, prev.dir, P2, cur.dir);
-    // Coin extérieur (convexe) : l'onglet tombe HORS du polygone et pas trop loin -> cerf-volant.
-    if (m && !pointInPolygon(m, poly) && Math.hypot(m.x - V.x, m.y - V.y) <= miterLimit * thickness) {
-      parts.push([V, P1, m, P2]);
-    } else {
-      parts.push([V, P1, P2]); // chanfrein (sommet rentrant : remblai inoffensif)
-    }
+    const V = poly[i];
+    const m = lineX(prev.B, prev.dir, cur.A, cur.dir);
+    if (m && Math.hypot(m.x - V.x, m.y - V.y) <= miterLimit * thickness) outer.push(m);
+    else { outer.push(prev.B); outer.push(cur.A); }
   }
-
-  const rings: Ring[] = parts.map((r) => r.map((p) => [p.x, p.y] as [number, number]));
-  const polys = rings.map((r) => [r] as Polygon);
+  const outerRing: Ring = outer.map((p) => [p.x, p.y] as [number, number]);
+  const innerRing: Ring = poly.map((p) => [p.x, p.y] as [number, number]);
   let union: MultiPolygon;
   try {
-    union = polygonClipping.union(polys[0], ...polys.slice(1));
+    union = polygonClipping.difference([outerRing], [innerRing]);
   } catch {
-    union = polys;
+    union = [[outerRing]];
   }
 
   ctx.fillStyle = '#b8c0cc';
