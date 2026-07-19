@@ -105,6 +105,41 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
   const draggingDoor = useRef<number>(-1);
   /** Cloison déplacée en bloc : index + position du curseur au début du glissement. */
   const draggingWholePart = useRef<{ index: number; from: Point } | null>(null);
+  /** Repères d'alignement actifs (façon Figma) affichés pendant un glissement de cloison. */
+  const alignGuidesRef = useRef<{ x?: number; y?: number }[]>([]);
+
+  /**
+   * Aimantation d'alignement : cale la cloison déplacée sur les axes/extrémités des AUTRES
+   * cloisons et des murs (même x ou même y), comme les repères de Figma. `movedPts` = points
+   * de la cloison après le déplacement brut (vide pour une extrémité isolée = on cale `cursor`).
+   */
+  const alignSnap = useCallback((cursor: Point, movedPts: Point[], excludeIndex: number) => {
+    const thresh = 8 / view.scale; // ~8 px, indépendant du zoom
+    const xs: number[] = [], ys: number[] = [];
+    room.points.forEach((p) => { xs.push(p.x); ys.push(p.y); });
+    (room.partitions ?? []).forEach((wp, i) => {
+      if (i === excludeIndex) return;
+      wp.points.forEach((p) => { xs.push(p.x); ys.push(p.y); });
+    });
+    const probe = movedPts.length ? movedPts : [cursor];
+    // Meilleur alignement en x et en y : le décalage le plus faible sous le seuil.
+    let bestX: { off: number; at: number } | null = null;
+    let bestY: { off: number; at: number } | null = null;
+    for (const p of probe) {
+      for (const cx of xs) { const o = cx - p.x; if (Math.abs(o) <= thresh && (!bestX || Math.abs(o) < Math.abs(bestX.off))) bestX = { off: o, at: cx }; }
+      for (const cy of ys) { const o = cy - p.y; if (Math.abs(o) <= thresh && (!bestY || Math.abs(o) < Math.abs(bestY.off))) bestY = { off: o, at: cy }; }
+    }
+    const guides: { x?: number; y?: number }[] = [];
+    if (bestX) guides.push({ x: bestX.at });
+    if (bestY) guides.push({ y: bestY.at });
+    if (movedPts.length) {
+      return { dx: bestX?.off ?? null, dy: bestY?.off ?? null, guides };
+    }
+    return {
+      point: { x: cursor.x + (bestX?.off ?? 0), y: cursor.y + (bestY?.off ?? 0) },
+      guides,
+    };
+  }, [room.points, room.partitions, view.scale]);
   const [selectedEl, setSelectedEl] = useState<{ type: 'partition' | 'door'; index: number; seg?: number } | null>(null);
   const rawWorld = useRef<Point>({ x: 0, y: 0 });
   const edgeLabels = useRef<EdgeLabel[]>([]);
@@ -364,6 +399,20 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
       drawPartitionHandles(ctx, room.partitions ?? [], view);
     }
     if (tool === 'edit') drawSelection(ctx, room, selectedEl, view, extT);
+    // Repères d'alignement (façon Figma) pendant un glissement de cloison.
+    if (tool === 'edit' && alignGuidesRef.current.length) {
+      ctx.save();
+      ctx.strokeStyle = '#ec4899';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+      for (const g of alignGuidesRef.current) {
+        ctx.beginPath();
+        if (g.x != null) { const sx = worldToScreen({ x: g.x, y: 0 }, view).x; ctx.moveTo(sx, 0); ctx.lineTo(sx, size.h); }
+        if (g.y != null) { const sy = worldToScreen({ x: 0, y: g.y }, view).y; ctx.moveTo(0, sy); ctx.lineTo(size.w, sy); }
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
     if (isDrawing) {
       // Cloison : aperçu de l'ÉPAISSEUR réelle (bande + deux faces), pas seulement l'axe.
       // Sans ça, on ne voit pas que le placo mord de part et d'autre du tracé, ni l'effet
@@ -611,19 +660,30 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
       moveVertex(draggingVertex.current, { x: Math.round(snapped.x * 10) / 10, y: Math.round(snapped.y * 10) / 10 });
       return;
     }
-    // Glisser une extrémité de cloison.
+    // Glisser une extrémité de cloison : aimantation d'alignement sur les autres cloisons.
     if (draggingPart.current) {
-      const snapped = editor.snapGrid ? snapToGrid(w, editor.gridStep) : w;
-      movePartitionPoint(draggingPart.current.pi, draggingPart.current.ki, { x: Math.round(snapped.x * 10) / 10, y: Math.round(snapped.y * 10) / 10 });
+      const { pi, ki } = draggingPart.current;
+      const snap = alignSnap(w, [], pi);
+      const p = snap.point ?? (editor.snapGrid ? snapToGrid(w, editor.gridStep) : w);
+      alignGuidesRef.current = snap.guides;
+      movePartitionPoint(pi, ki, { x: Math.round(p.x * 10) / 10, y: Math.round(p.y * 10) / 10 });
       return;
     }
-    // Déplacer une cloison entière : translation de tous ses points, calée à la grille.
+    // Déplacer une cloison entière : aimantation d'alignement (façon Figma) sur les autres.
     if (draggingWholePart.current) {
       const drag = draggingWholePart.current;
-      const gx = editor.snapGrid ? Math.round((w.x - drag.from.x) / editor.gridStep) * editor.gridStep : w.x - drag.from.x;
-      const gy = editor.snapGrid ? Math.round((w.y - drag.from.y) / editor.gridStep) * editor.gridStep : w.y - drag.from.y;
-      moveWholePartition(drag.index, gx, gy);
-      draggingWholePart.current = { index: drag.index, from: { x: drag.from.x + gx, y: drag.from.y + gy } };
+      const rawDx = w.x - drag.from.x, rawDy = w.y - drag.from.y;
+      const pts = room.partitions[drag.index]?.points ?? [];
+      const snap = alignSnap(w, pts.map((p) => ({ x: p.x + rawDx, y: p.y + rawDy })), drag.index);
+      let dx = rawDx, dy = rawDy;
+      if (snap.dx != null) dx = rawDx + snap.dx;
+      else if (editor.snapGrid) dx = Math.round(rawDx / editor.gridStep) * editor.gridStep;
+      if (snap.dy != null) dy = rawDy + snap.dy;
+      else if (editor.snapGrid) dy = Math.round(rawDy / editor.gridStep) * editor.gridStep;
+      dx = Math.round(dx * 10) / 10; dy = Math.round(dy * 10) / 10;
+      alignGuidesRef.current = snap.guides;
+      moveWholePartition(drag.index, dx, dy);
+      draggingWholePart.current = { index: drag.index, from: { x: drag.from.x + dx, y: drag.from.y + dy } };
       return;
     }
 
@@ -646,8 +706,8 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
     if (draggingDoor.current >= 0) { draggingDoor.current = -1; return; }
     if (draggingStart.current) { draggingStart.current = false; return; }
     if (draggingVertex.current >= 0) { draggingVertex.current = -1; return; }
-    if (draggingPart.current) { draggingPart.current = null; return; }
-    if (draggingWholePart.current) { draggingWholePart.current = null; return; }
+    if (draggingPart.current) { draggingPart.current = null; alignGuidesRef.current = []; return; }
+    if (draggingWholePart.current) { draggingWholePart.current = null; alignGuidesRef.current = []; return; }
     setTimeout(() => (dragRef.current = null), 0);
   };
 
