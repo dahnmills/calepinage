@@ -6,7 +6,7 @@ import type {
 import { flattenPacks } from '../model/stock';
 import { computeLayout } from '../model/layout';
 import { detectSpaces } from '../model/spaces';
-import { pointInPolygon } from '../model/geometry';
+import { pointInPolygon, dedupePoints } from '../model/geometry';
 import { clearProject, loadProject, saveProject, type Project } from './persist';
 
 export type Tool = 'draw' | 'edit' | 'view' | 'hole' | 'door' | 'wall' | 'startline' | 'measure' | 'space';
@@ -207,7 +207,9 @@ export const useStore = create<State>((set, get) => ({
     });
   },
   loadInto: (p) => set({
-    room: p.room, packs: p.packs, config: { ...defaultConfig, ...p.config },
+    // Un plan enregistré peut contenir des sommets doublés : on nettoie à l'ouverture.
+    room: { ...p.room, points: dedupePoints(p.room.points) },
+    packs: p.packs, config: { ...defaultConfig, ...p.config },
     measures: p.measures, drawing: [], result: null, past: [], future: [],
     selectedVertex: null, tool: 'edit',
   }),
@@ -375,7 +377,7 @@ export const useStore = create<State>((set, get) => ({
   addDrawPoint: (p) => set({ drawing: [...get().drawing, p] }),
   undoDrawPoint: () => set({ drawing: get().drawing.slice(0, -1) }),
   closeRoom: () => {
-    const pts = get().drawing;
+    const pts = dedupePoints(get().drawing);
     if (pts.length >= 3) {
       get().snapshot();
       set({ room: { ...get().room, points: pts }, drawing: [], tool: 'edit', result: null });

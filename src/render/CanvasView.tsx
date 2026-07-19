@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import polygonClipping, { type MultiPolygon, type Polygon, type Ring } from 'polygon-clipping';
 import { useStore } from '../store/useStore';
-import { polygonBBox, pointInPolygon, partitionRects } from '../model/geometry';
+import { polygonBBox, pointInPolygon, partitionRects, dedupePoints } from '../model/geometry';
 import { ghostRows, poseDirection, poseFrame, type GhostRow, type PoseFrame } from '../model/startline';
 import { detectSpaces, spaceCentroid, type Space } from '../model/spaces';
 import { flattenPacks, packIdOf } from '../model/stock';
@@ -1676,7 +1676,10 @@ function drawSelection(
  * pas de face franche ; ici les deux faces sont de vraies géométries, donc les angles
  * se coupent net, y compris sur les murs obliques.
  */
-function drawExteriorWalls(ctx: CanvasRenderingContext2D, poly: Point[], thickness: number, v: View) {
+function drawExteriorWalls(ctx: CanvasRenderingContext2D, rawPoly: Point[], thickness: number, v: View) {
+  // Un tracé peut contenir des sommets doublés (double-clic, accroche) : arête nulle =
+  // direction indéfinie = coin de mur qui décroche. On nettoie avant tout calcul.
+  const poly = dedupePoints(rawPoly);
   const n = poly.length;
   if (n < 3 || thickness <= 0) return;
   // `poly` = nu intérieur ; l'épaisseur part vers l'extérieur. La face extérieure est le

@@ -7,6 +7,21 @@ export interface BBox {
   maxY: number;
 }
 
+/**
+ * Retire les sommets confondus consécutifs (et la fermeture répétée du 1er point).
+ * Indispensable : un sommet dupliqué crée une arête de longueur nulle, dont la direction
+ * est indéfinie — d'où des normales fausses et des angles de mur qui partent de travers.
+ */
+export function dedupePoints(pts: Point[], eps = 1e-6): Point[] {
+  const out: Point[] = [];
+  for (const p of pts) {
+    const q = out[out.length - 1];
+    if (!q || Math.hypot(p.x - q.x, p.y - q.y) > eps) out.push(p);
+  }
+  while (out.length > 1 && Math.hypot(out[0].x - out[out.length - 1].x, out[0].y - out[out.length - 1].y) <= eps) out.pop();
+  return out;
+}
+
 /** Aire signée absolue d'un polygone (formule du lacet). */
 export function polygonArea(poly: Point[]): number {
   let a = 0;
