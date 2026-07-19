@@ -239,7 +239,7 @@ export const useStore = create<State>((set, get) => ({
     set({ room: { ...get().room, doors: [] }, result: null });
   },
   closePartition: () => {
-    const pts = get().drawing;
+    const pts = dedupePoints(get().drawing);
     if (pts.length >= 2) {
       get().snapshot();
       const room = get().room;

@@ -229,24 +229,15 @@ export function segmentRect(
 export function partitionRects(
   partitions: { points: Point[]; thickness: number; align?: WallAlign }[],
 ): Point[][] {
-  // Multiplicité de chaque extrémité, comptée PAR SEGMENT : un point où aboutissent 2+
-  // segments est une JONCTION (coin d'une même polyligne — le point du milieu y appartient
-  // à deux segments — OU deux cloisons qui se rejoignent). On y prolonge les emprises pour
-  // qu'elles se recouvrent et remplissent le coin. Une extrémité libre (1 seul segment)
-  // reste franche, sans dépasser dans le vide.
-  const key = (p: Point) => `${Math.round(p.x * 10)},${Math.round(p.y * 10)}`;
-  const count = new Map<string, number>();
-  const bump = (p: Point) => count.set(key(p), (count.get(key(p)) ?? 0) + 1);
-  for (const p of partitions) {
-    for (let i = 0; i < p.points.length - 1; i++) { bump(p.points[i]); bump(p.points[i + 1]); }
-  }
-  const shared = (pt: Point) => (count.get(key(pt)) ?? 0) >= 2;
-
+  // Chaque segment garde EXACTEMENT sa longueur tracée : on ne rallonge PLUS aux jonctions.
+  // Une cloison de 293 mesure 293 sur ses faces, pas 293 ± la moitié de l'épaisseur. Aux
+  // angles d'une polyligne, les deux bras se recouvrent naturellement dans le carré du coin
+  // (l'union les soude côté intérieur) ; on n'ajoute ni ne soustrait rien à la cote.
   const rects: Point[][] = [];
   for (const p of partitions) {
-    for (let i = 0; i < p.points.length - 1; i++) {
-      const a = p.points[i], b = p.points[i + 1];
-      rects.push(segmentRect(a, b, p.thickness, p.align ?? 'center', shared(a), shared(b)));
+    const pts = dedupePoints(p.points);
+    for (let i = 0; i < pts.length - 1; i++) {
+      rects.push(segmentRect(pts[i], pts[i + 1], p.thickness, p.align ?? 'center', false, false));
     }
   }
   return rects;
