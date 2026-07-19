@@ -368,6 +368,13 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
       if (tool === 'wall') {
         const chain = preview && preview.hasLast ? [...drawing, preview.point] : drawing;
         drawPartitionPreview(ctx, chain, editor.wallThickness, view);
+        // Cotes automatiques EN DIRECT sur la cloison en cours : on place en visant le vrai
+        // chiffre net (face à face), celui qu'on relira une fois posée — même calcul, donc
+        // « poser à 299 » donne bien 299 net, pas 299 à l'axe.
+        if (chain.length >= 2) {
+          const draft: Partition = { id: '__draft', points: chain, thickness: editor.wallThickness, align: 'center' };
+          drawPartitionGaps(ctx, { ...room, partitions: [...(room.partitions ?? []), draft] }, view, draft.id);
+        }
       }
       drawDrawState(ctx, drawing, preview, view);
       if (preview) drawSnapMark(ctx, preview, view);
@@ -1699,7 +1706,7 @@ function rayHitSeg(o: Point, d: Point, a: Point, b: Point): number {
  * cloison) et on affiche la distance NETTE, face à face, épaisseurs déduites. On suit ainsi
  * en direct l'écart d'une cloison à l'autre, et il se met à jour quand on la déplace.
  */
-function drawPartitionGaps(ctx: CanvasRenderingContext2D, room: Room, v: View) {
+function drawPartitionGaps(ctx: CanvasRenderingContext2D, room: Room, v: View, onlyId?: string) {
   // Obstacles : faces intérieures du périmètre + faces de toutes les cloisons.
   const obstacles: [Point, Point][] = [];
   const n = room.points.length;
@@ -1720,6 +1727,9 @@ function drawPartitionGaps(ctx: CanvasRenderingContext2D, room: Room, v: View) {
     for (let si = 0; si < wall.points.length - 1; si++) {
       const rect = partRects[ri++];
       if (!rect) continue;
+      // Pendant le tracé : on ne mesure QUE depuis la cloison en cours (les autres ont déjà
+      // leurs cotes affichées par ailleurs).
+      if (onlyId && wall.id !== onlyId) continue;
       const a = wall.points[si], b = wall.points[si + 1];
       const len = Math.hypot(b.x - a.x, b.y - a.y);
       if (len < 1) continue;
