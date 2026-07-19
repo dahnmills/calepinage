@@ -12,7 +12,7 @@ import {
   snapDrawPoint, snapToGrid, nearestVertex, nearestEdge, projectToSegment, dist, angleDeg, sub,
   type Guide, type SnapResult,
 } from './roomEditing';
-import type { Point, Door as DoorT, Partition, Room, WallAlign } from '../model/types';
+import type { Point, Door as DoorT, Partition, Room } from '../model/types';
 
 interface DrawPreview extends SnapResult { hasLast: boolean }
 interface EdgeLabel { edgeIndex: number; sx: number; sy: number; length: number }
@@ -115,15 +115,26 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
    * sinon la grille happe le point juste avant le mur et la cote s'arrête dans le vide.
    * `axisLock` force la cote à l'horizontale / la verticale exacte (0° ou 90°).
    */
+  // Faces des cloisons + murs : la mesure s'accroche aux surfaces VISIBLES (bords de
+  // l'épaisseur), pas à l'axe. Ainsi une cote « à droite d'une cloison » démarre sur sa face.
+  const measureGuides = useMemo<Guide[]>(() => {
+    const g: Guide[] = [];
+    if (room.points.length >= 2) g.push({ pts: room.points, closed: true });
+    for (const rect of partitionRects(room.partitions ?? [])) g.push({ pts: rect, closed: true });
+    return g;
+  }, [room.points, room.partitions]);
+
   const snapMeasure = useCallback(
     (raw: Point): SnapResult => {
       const wallSnap = (vThreshPx * 2.2) / view.scale;
       const base = snapDrawPoint({
         points: measureStart ? [measureStart] : [],
-        raw, gridStep: editor.gridStep, snapGrid: editor.snapGrid && !axisLock,
+        // Mesure = placement LIBRE et précis : pas d'aimant grille, on pose le point pile
+        // où l'on veut. Seules les faces/murs happent le point quand on s'en approche.
+        raw, gridStep: editor.gridStep, snapGrid: false,
         snapAngle: editor.snapAngle && !axisLock, angleStep: editor.angleStep,
-        vertexThreshold: wallSnap,
-        guides,
+        vertexThreshold: wallSnap, guideThreshold: 12,
+        guides: measureGuides,
       });
       if (!measureStart || !axisLock) return base;
       // Axe verrouillé : on projette sur l'horizontale ou la verticale, celle dont on est
@@ -134,7 +145,7 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
         : { x: measureStart.x, y: base.point.y };
       return { ...base, point: p, angle: dx >= dy ? 0 : 90 };
     },
-    [measureStart, editor, view.scale, guides, axisLock],
+    [measureStart, editor, view.scale, measureGuides, axisLock],
   );
 
   // --- Ligne de départ ---
@@ -356,7 +367,7 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
       // de « centré / face gauche / face droite » — d'où les cotes qui semblent fausses.
       if (tool === 'wall') {
         const chain = preview && preview.hasLast ? [...drawing, preview.point] : drawing;
-        drawPartitionPreview(ctx, chain, editor.wallThickness, editor.wallAlign, view);
+        drawPartitionPreview(ctx, chain, editor.wallThickness, view);
       }
       drawDrawState(ctx, drawing, preview, view);
       if (preview) drawSnapMark(ctx, preview, view);
@@ -610,7 +621,7 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
       }
       if (measureStart) snapshot();
       const p = snapMeasure(w).point;
-      const q = { x: Math.round(p.x), y: Math.round(p.y) };
+      const q = { x: Math.round(p.x * 10) / 10, y: Math.round(p.y * 10) / 10 };
       if (measureStart) finishMeasure(q); else startMeasure(q);
       return;
     }
@@ -873,7 +884,7 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
             const droit = Math.abs(ang) < 0.05 || Math.abs(Math.abs(ang) - 90) < 0.05;
             return (
               <>
-                <span className="hud-field">L <b>{Math.round(d)}</b> cm</span>
+                <span className="hud-field">L <b>{(Math.round(d * 10) / 10).toFixed(1)}</b> cm</span>
                 <span className="hud-field">
                   ∠ <b className={droit ? 'ok' : ''}>{ang.toFixed(1)}</b>°
                   {droit && <span className="hud-ok"> droit</span>}
@@ -995,17 +1006,6 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
                 value={w.thickness} min={0.5} step={0.5} suffix="cm"
                 onChange={(v) => { if (v > 0) updatePartition(i, { thickness: v }); }}
               />
-            </label>
-            <label className="field">
-              <span>Épaisseur portée</span>
-              <select
-                value={w.align}
-                onChange={(e) => updatePartition(i, { align: e.target.value as WallAlign })}
-              >
-                <option value="center">Centrée (axe)</option>
-                <option value="left">À gauche (face)</option>
-                <option value="right">À droite (face)</option>
-              </select>
             </label>
             <button
               className="danger"
@@ -1367,7 +1367,9 @@ function drawMeasure(ctx: CanvasRenderingContext2D, a: Point, b: Point, v: View,
   if (ang > 90) ang -= 180;
   if (ang < -90) ang += 180;
   const droit = Math.abs(ang) < 0.05 || Math.abs(Math.abs(ang) - 90) < 0.05;
-  const txt = droit ? `${Math.round(len)} cm` : `${Math.round(len)} cm · ${ang.toFixed(1)}°`;
+  // Au dixième de cm : une cote de 174,5 doit se lire 174,5, pas 174 ou 175.
+  const cm = `${(Math.round(len * 10) / 10).toFixed(1)} cm`;
+  const txt = droit ? cm : `${cm} · ${ang.toFixed(1)}°`;
   ctx.font = '700 12px system-ui';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
@@ -1742,13 +1744,22 @@ function drawPartitionGaps(ctx: CanvasRenderingContext2D, room: Room, v: View) {
         const o = { x: face.x + ux * off, y: face.y + uy * off };
         const hit = { x: o.x + dir.x * best, y: o.y + dir.y * best };
         const s0 = worldToScreen(o, v), s1 = worldToScreen(hit, v);
-        ctx.strokeStyle = 'rgba(180,83,9,0.8)';
+        ctx.strokeStyle = 'rgba(180,83,9,0.85)';
         ctx.fillStyle = '#9a3412';
-        ctx.lineWidth = 1;
+        ctx.lineWidth = 1.2;
         ctx.setLineDash([4, 3]);
         ctx.beginPath(); ctx.moveTo(s0.x, s0.y); ctx.lineTo(s1.x, s1.y); ctx.stroke();
         ctx.setLineDash([]);
-        const txt = `${Math.round(best)}`;
+        // Repères aux DEUX extrémités : on voit d'où part et où s'arrête la cote (sur les faces).
+        const tpx = -uy * 6, tpy = ux * 6; // perpendiculaire à la cote (le long des faces)
+        const stpx = tpx, stpy = tpy;
+        for (const s of [s0, s1]) {
+          ctx.beginPath();
+          ctx.moveTo(s.x + stpx, s.y + stpy); ctx.lineTo(s.x - stpx, s.y - stpy);
+          ctx.stroke();
+          ctx.beginPath(); ctx.arc(s.x, s.y, 2.5, 0, Math.PI * 2); ctx.fill();
+        }
+        const txt = `${(Math.round(best * 10) / 10).toFixed(1).replace('.0', '')}`;
         const mx = (s0.x + s1.x) / 2, my = (s0.y + s1.y) / 2;
         const w = ctx.measureText(txt).width + 8;
         ctx.fillStyle = '#fff7ed';
@@ -1812,10 +1823,10 @@ function drawVertices(
  * (centré / face gauche / face droite) — pour poser une FACE pile sur une cote.
  */
 function drawPartitionPreview(
-  ctx: CanvasRenderingContext2D, chain: Point[], thickness: number, align: WallAlign, v: View,
+  ctx: CanvasRenderingContext2D, chain: Point[], thickness: number, v: View,
 ) {
   if (chain.length < 2 || thickness <= 0) return;
-  const rects = partitionRects([{ points: chain, thickness, align }]);
+  const rects = partitionRects([{ points: chain, thickness, align: 'center' }]);
   ctx.save();
   for (const rect of rects) {
     ctx.beginPath();
