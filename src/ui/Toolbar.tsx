@@ -58,6 +58,12 @@ export default function Toolbar() {
                 onChange={(v) => setEditor({ wallThickness: v })}
               />
             </span>
+            <button
+              onClick={() => setEditor({ wallAlign: editor.wallAlign === 'left' ? 'right' : 'left' })}
+              title="Côté où part l'épaisseur : le tracé est une FACE de la cloison, pas son axe. La longueur tracée = la longueur de cette face."
+            >
+              {editor.wallAlign === 'right' ? '⇥ Épaisseur à droite' : '⇤ Épaisseur à gauche'}
+            </button>
             <button onClick={undoDrawPoint} disabled={drawing.length === 0} title="Retirer le dernier point">
               ↩ Point
             </button>

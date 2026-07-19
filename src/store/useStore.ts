@@ -158,7 +158,7 @@ export const useStore = create<State>((set, get) => ({
   tool: 'draw',
   room: saved?.room ?? emptyRoom,
   drawing: [],
-  editor: { gridStep: 10, showGrid: true, snapGrid: true, snapAngle: true, angleStep: 15, wallThickness: 7, wallAlign: 'center' },
+  editor: { gridStep: 10, showGrid: true, snapGrid: true, snapAngle: true, angleStep: 15, wallThickness: 7, wallAlign: 'left' },
   selectedVertex: null,
   measures: saved?.measures ?? [],
   measureStart: null,

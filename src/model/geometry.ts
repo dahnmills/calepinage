@@ -225,19 +225,57 @@ export function segmentRect(
   ];
 }
 
-/** Emprises (rectangles) de toutes les cloisons. */
+/** Intersection de deux droites (point + direction). Null si parallèles. */
+function lineIntersect(p1: Point, d1: Point, p2: Point, d2: Point): Point | null {
+  const den = d1.x * d2.y - d1.y * d2.x;
+  if (Math.abs(den) < 1e-9) return null;
+  const t = ((p2.x - p1.x) * d2.y - (p2.y - p1.y) * d2.x) / den;
+  return { x: p1.x + d1.x * t, y: p1.y + d1.y * t };
+}
+
+/**
+ * Emprises (rectangles) de toutes les cloisons, PLUS un remblai d'angle par sommet
+ * intérieur. Chaque segment garde EXACTEMENT sa longueur tracée (la face plate ne
+ * déborde pas) ; seul le coin est comblé jusqu'au point d'ONGLET, ce qui donne une
+ * jonction carrée nette sans rien ajouter à la longueur. Angle très aigu : l'onglet
+ * est plafonné (chanfrein) pour ne pas laisser filer une pointe.
+ */
 export function partitionRects(
   partitions: { points: Point[]; thickness: number; align?: WallAlign }[],
 ): Point[][] {
-  // Chaque segment garde EXACTEMENT sa longueur tracée : on ne rallonge PLUS aux jonctions.
-  // Une cloison de 293 mesure 293 sur ses faces, pas 293 ± la moitié de l'épaisseur. Aux
-  // angles d'une polyligne, les deux bras se recouvrent naturellement dans le carré du coin
-  // (l'union les soude côté intérieur) ; on n'ajoute ni ne soustrait rien à la cote.
+  const miterLimit = 3;
   const rects: Point[][] = [];
   for (const p of partitions) {
     const pts = dedupePoints(p.points);
+    const t = p.thickness;
+    const align = p.align ?? 'center';
+    const near = align === 'center' ? -t / 2 : align === 'left' ? -t : 0;
+    const far = near + t;
     for (let i = 0; i < pts.length - 1; i++) {
-      rects.push(segmentRect(pts[i], pts[i + 1], p.thickness, p.align ?? 'center', false, false));
+      rects.push(segmentRect(pts[i], pts[i + 1], t, align, false, false));
+    }
+    // Remblai d'onglet à chaque sommet interne.
+    for (let i = 1; i < pts.length - 1; i++) {
+      const A = pts[i - 1], V = pts[i], B = pts[i + 1];
+      const uA = { x: V.x - A.x, y: V.y - A.y };
+      const lA = Math.hypot(uA.x, uA.y) || 1; uA.x /= lA; uA.y /= lA;
+      const uB = { x: B.x - V.x, y: B.y - V.y };
+      const lB = Math.hypot(uB.x, uB.y) || 1; uB.x /= lB; uB.y /= lB;
+      const pA = { x: -uA.y, y: uA.x }, pB = { x: -uB.y, y: uB.x };
+      // Les deux côtés (near/far) : celui qui bâille (convexe) est comblé jusqu'à l'onglet,
+      // l'autre tombe dans le recouvrement (inoffensif).
+      for (const off of [near, far]) {
+        const Pa = { x: V.x + pA.x * off, y: V.y + pA.y * off };
+        const Pb = { x: V.x + pB.x * off, y: V.y + pB.y * off };
+        const M = lineIntersect(Pa, uA, Pb, uB);
+        // Le remblai PASSE PAR V : il partage une arête avec chaque bras (et non un simple
+        // point de contact), donc l'union soude vraiment au lieu de laisser des morceaux.
+        if (M && Math.hypot(M.x - V.x, M.y - V.y) <= miterLimit * t) {
+          rects.push([Pa, M, Pb, V]); // onglet plein (coin carré)
+        } else {
+          rects.push([Pa, Pb, V]); // chanfrein : angle très aigu, pas de pointe qui file
+        }
+      }
     }
   }
   return rects;
