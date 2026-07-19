@@ -347,6 +347,13 @@ export default function CanvasView({ highlightCuts, showNumbers }: { highlightCu
     }
     if (tool === 'edit') drawSelection(ctx, room, selectedEl, view, extT);
     if (isDrawing) {
+      // Cloison : aperçu de l'ÉPAISSEUR réelle (bande + deux faces), pas seulement l'axe.
+      // Sans ça, on ne voit pas que le placo mord de part et d'autre du tracé, ni l'effet
+      // de « centré / face gauche / face droite » — d'où les cotes qui semblent fausses.
+      if (tool === 'wall') {
+        const chain = preview && preview.hasLast ? [...drawing, preview.point] : drawing;
+        drawPartitionPreview(ctx, chain, editor.wallThickness, editor.wallAlign, view);
+      }
       drawDrawState(ctx, drawing, preview, view);
       if (preview) drawSnapMark(ctx, preview, view);
     }
@@ -1710,6 +1717,30 @@ function drawVertices(
     ctx.lineWidth = 2;
     ctx.fill(); ctx.stroke();
   }
+}
+
+/**
+ * Aperçu de l'épaisseur d'une cloison en cours de tracé : bande semi-transparente + les
+ * deux faces. Montre où la matière tombe par rapport à l'axe tracé, et l'effet de l'align
+ * (centré / face gauche / face droite) — pour poser une FACE pile sur une cote.
+ */
+function drawPartitionPreview(
+  ctx: CanvasRenderingContext2D, chain: Point[], thickness: number, align: WallAlign, v: View,
+) {
+  if (chain.length < 2 || thickness <= 0) return;
+  const rects = partitionRects([{ points: chain, thickness, align }]);
+  ctx.save();
+  for (const rect of rects) {
+    ctx.beginPath();
+    rect.forEach((p, k) => { const s = worldToScreen(p, v); if (k === 0) ctx.moveTo(s.x, s.y); else ctx.lineTo(s.x, s.y); });
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(30,41,59,0.35)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(15,23,42,0.7)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 function drawDrawState(
