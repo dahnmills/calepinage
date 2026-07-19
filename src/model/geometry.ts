@@ -214,19 +214,22 @@ export function segmentRect(
 export function partitionRects(
   partitions: { points: Point[]; thickness: number; align?: WallAlign }[],
 ): Point[][] {
-  // Multiplicité de chaque extrémité : un point partagé par 2+ segments est une JONCTION
-  // (coin d'une polyligne OU deux cloisons qui se rejoignent). On y prolonge les segments
-  // pour que leurs emprises se recouvrent et remplissent le coin. Une extrémité libre
-  // (multiplicité 1) reste franche, sans dépasser dans le vide.
+  // Multiplicité de chaque extrémité, comptée PAR SEGMENT : un point où aboutissent 2+
+  // segments est une JONCTION (coin d'une même polyligne — le point du milieu y appartient
+  // à deux segments — OU deux cloisons qui se rejoignent). On y prolonge les emprises pour
+  // qu'elles se recouvrent et remplissent le coin. Une extrémité libre (1 seul segment)
+  // reste franche, sans dépasser dans le vide.
   const key = (p: Point) => `${Math.round(p.x * 10)},${Math.round(p.y * 10)}`;
   const count = new Map<string, number>();
-  for (const p of partitions) for (const pt of p.points) count.set(key(pt), (count.get(key(pt)) ?? 0) + 1);
+  const bump = (p: Point) => count.set(key(p), (count.get(key(p)) ?? 0) + 1);
+  for (const p of partitions) {
+    for (let i = 0; i < p.points.length - 1; i++) { bump(p.points[i]); bump(p.points[i + 1]); }
+  }
   const shared = (pt: Point) => (count.get(key(pt)) ?? 0) >= 2;
 
   const rects: Point[][] = [];
   for (const p of partitions) {
-    const last = p.points.length - 2;
-    for (let i = 0; i <= last; i++) {
+    for (let i = 0; i < p.points.length - 1; i++) {
       const a = p.points[i], b = p.points[i + 1];
       rects.push(segmentRect(a, b, p.thickness, p.align ?? 'center', shared(a), shared(b)));
     }
