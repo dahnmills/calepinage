@@ -366,13 +366,20 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
       // Sans ça, on ne voit pas que le placo mord de part et d'autre du tracé, ni l'effet
       // de « centré / face gauche / face droite » — d'où les cotes qui semblent fausses.
       if (tool === 'wall') {
-        const chain = preview && preview.hasLast ? [...drawing, preview.point] : drawing;
-        drawPartitionPreview(ctx, chain, editor.wallThickness, view);
-        // Cotes automatiques EN DIRECT sur la cloison en cours : on place en visant le vrai
-        // chiffre net (face à face), celui qu'on relira une fois posée — même calcul, donc
-        // « poser à 299 » donne bien 299 net, pas 299 à l'axe.
-        if (chain.length >= 2) {
+        let chain = preview && preview.hasLast ? [...drawing, preview.point] : drawing;
+        // Avant même de poser le 2ᵉ point (curseur sur un mur) : on synthétise une cloison
+        // perpendiculaire au mur, pour afficher DÈS MAINTENANT les cotes face à face — sinon
+        // on place le 1ᵉʳ point sur un chiffre d'axe, décalé de la demi-épaisseur.
+        if (chain.length < 2 && preview) {
+          const p = chain[0] ?? preview.point;
+          const perp = perpToNearestEdge(room.points, p);
+          if (perp) chain = [p, { x: p.x + perp.x * 120, y: p.y + perp.y * 120 }];
+        }
+        if (chain.length >= 2 && (preview || drawing.length > 0)) {
           const draft: Partition = { id: '__draft', points: chain, thickness: editor.wallThickness, align: 'center' };
+          if (drawing.length > 0) drawPartitionPreview(ctx, chain, editor.wallThickness, view);
+          // Cotes face à face EN DIRECT : on place en visant le vrai chiffre net, celui qu'on
+          // relira une fois posée — « poser à 299 » donne bien 299 net, pas 299 à l'axe.
           drawPartitionGaps(ctx, { ...room, partitions: [...(room.partitions ?? []), draft] }, view, draft.id);
         }
       }
@@ -1328,6 +1335,24 @@ function drawExcludedSpace(ctx: CanvasRenderingContext2D, sp: Space, v: View) {
     ctx.stroke();
   }
   ctx.restore();
+}
+
+/** Perpendiculaire (rentrante) du mur le plus proche d'un point : sens d'une cloison qui y démarre. */
+function perpToNearestEdge(poly: Point[], p: Point): Point | null {
+  const n = poly.length;
+  if (n < 2) return null;
+  let best: { d: number; nx: number; ny: number } | null = null;
+  for (let i = 0; i < n; i++) {
+    const a = poly[i], b = poly[(i + 1) % n];
+    const pr = projectToSegment(a, b, p);
+    if (pr.d > 6 || (best && pr.d >= best.d)) continue;
+    const dx = b.x - a.x, dy = b.y - a.y, l = Math.hypot(dx, dy) || 1;
+    let nx = -dy / l, ny = dx / l;
+    const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    if (!pointInPolygon({ x: mid.x + nx * 0.5, y: mid.y + ny * 0.5 }, poly)) { nx = -nx; ny = -ny; }
+    best = { d: pr.d, nx, ny };
+  }
+  return best ? { x: best.nx, y: best.ny } : null;
 }
 
 /** Distance d'un point (posé sur le périmètre) au coin de départ de son mur. */
