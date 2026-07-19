@@ -461,8 +461,49 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
       guides,
       ...ov,
     });
+    // Cloison : on cale la COTE face à face sur le demi-centimètre (pas le point d'axe).
+    // Ainsi on tombe pile sur 299,0 au lieu de 298,8 / 299,1 — c'est la mesure nette qui
+    // compte, pas la position de l'axe (décalée de la demi-épaisseur).
+    if (tool === 'wall' && !ov.overrideLen) {
+      res.point = snapCloisonGap(res.point, editor.wallThickness, 0.5);
+    }
     return { ...res, hasLast: drawing.length > 0 };
-  }, [drawing, editor, override, view.scale, guides]);
+  }, [drawing, editor, override, view.scale, guides, tool]);
+
+  /**
+   * Décale le point le long du mur pour que la cote NETTE (face à face) au voisin le plus
+   * proche tombe sur un multiple de `step`. La cloison démarrant contre un mur est
+   * perpendiculaire à lui ; on se déplace donc le long du mur (direction de la cote).
+   */
+  const snapCloisonGap = (p: Point, thickness: number, step: number): Point => {
+    const t = drawing.length > 0
+      ? (() => { const a = drawing[drawing.length - 1]; const l = dist(a, p) || 1; return { x: (p.x - a.x) / l, y: (p.y - a.y) / l }; })()
+      : perpToNearestEdge(room.points, p);
+    if (!t) return p;
+    const nx = -t.y, ny = t.x; // le long du mur = normale à la cloison
+    // Obstacles : faces du périmètre + faces des cloisons existantes.
+    const obs: [Point, Point][] = [];
+    const pp = room.points; const n = pp.length;
+    for (let i = 0; i < n; i++) obs.push([pp[i], pp[(i + 1) % n]]);
+    for (const r of partitionRects(room.partitions ?? [])) for (let i = 0; i < r.length; i++) obs.push([r[i], r[(i + 1) % r.length]]);
+    const cast = (dir: Point) => {
+      const o = { x: p.x + dir.x * (thickness / 2), y: p.y + dir.y * (thickness / 2) };
+      let best = Infinity;
+      for (const [oa, ob] of obs) { const d = rayHitSeg(o, dir, oa, ob); if (d < best) best = d; }
+      return best;
+    };
+    const gR = cast({ x: nx, y: ny }), gL = cast({ x: -nx, y: -ny });
+    // On cale la cote la plus proche (celle qu'on vise).
+    if (gR <= gL && Number.isFinite(gR) && gR < 2000) {
+      const target = Math.round(gR / step) * step;
+      return { x: p.x + nx * (target - gR), y: p.y + ny * (target - gR) };
+    }
+    if (Number.isFinite(gL) && gL < 2000) {
+      const target = Math.round(gL / step) * step;
+      return { x: p.x - nx * (target - gL), y: p.y - ny * (target - gL) };
+    }
+    return p;
+  };
 
   // --- Souris ---
   const onMouseDown = (e: React.MouseEvent) => {
