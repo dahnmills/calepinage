@@ -1792,6 +1792,12 @@ function drawHole(ctx: CanvasRenderingContext2D, poly: Point[], v: View) {
   ctx.stroke();
 }
 
+/** Cote au dixième de cm, sans « ,0 » inutile : 530 reste 530, 29,5 s'affiche 29,5. */
+function fmtLen(cm: number): string {
+  const r = Math.round(cm * 10) / 10;
+  return `${r}`; // 530 reste 530, 29,5 s'affiche « 29.5 » (même écriture que la boîte de dialogue)
+}
+
 function drawDims(
   ctx: CanvasRenderingContext2D, poly: Point[], v: View, labels: EdgeLabel[], wallOffsetPx?: number,
 ) {
@@ -1812,7 +1818,7 @@ function drawDims(
     const off = 18 + (wallOffsetPx ?? 0);
     const sx = s.x + nx * off, sy = s.y + ny * off;
     labels.push({ edgeIndex: i, sx, sy, length });
-    const txt = `${Math.round(length)}`;
+    const txt = fmtLen(length);
     const w = ctx.measureText(txt).width + 12;
     ctx.fillStyle = '#ffffff';
     ctx.strokeStyle = '#93c5fd';
@@ -1948,7 +1954,7 @@ function drawPartitionDims(ctx: CanvasRenderingContext2D, pts: Point[], v: View)
     const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
     const s = worldToScreen(mid, v);
     const sx = s.x + nx * 16, sy = s.y + ny * 16;
-    const txt = `${Math.round(length)}`;
+    const txt = fmtLen(length);
     const w = ctx.measureText(txt).width + 10;
     ctx.fillStyle = '#ffffff';
     ctx.strokeStyle = '#94a3b8';
