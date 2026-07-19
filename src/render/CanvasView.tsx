@@ -1712,6 +1712,9 @@ function drawPartitionGaps(ctx: CanvasRenderingContext2D, room: Room, v: View) {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
+  // On collecte d'abord toutes les cotes, puis on dédoublonne : l'écart entre deux cloisons
+  // est mesuré des deux côtés (chacune vers l'autre) et donnerait deux fois la même cote.
+  const gaps: { o: Point; hit: Point; ux: number; uy: number; dist: number }[] = [];
   let ri = 0;
   for (const wall of room.partitions) {
     for (let si = 0; si < wall.points.length - 1; si++) {
@@ -1722,14 +1725,15 @@ function drawPartitionGaps(ctx: CanvasRenderingContext2D, room: Room, v: View) {
       if (len < 1) continue;
       const ux = (b.x - a.x) / len, uy = (b.y - a.y) / len;
       const nx = -uy, ny = ux; // normale gauche
-      // Les faces sont les deux longs côtés du rectangle : côtés 0-1 et 2-3.
       const faceMid = (i: number, j: number) => ({ x: (rect[i].x + rect[j].x) / 2, y: (rect[i].y + rect[j].y) / 2 });
+      // Chaque face part de son bord et tire vers l'EXTÉRIEUR de la cloison. Côté 0-1 est
+      // au bord `near` (dir = -normale) ; côté 2-3 au bord `far` (dir = +normale). Tirer
+      // vers l'intérieur mesurerait à partir de la face opposée -> +épaisseur (le bug 39,4).
       const sides = [
-        { face: faceMid(0, 1), dir: { x: nx, y: ny } },
-        { face: faceMid(2, 3), dir: { x: -nx, y: -ny } },
+        { face: faceMid(0, 1), dir: { x: -nx, y: -ny } },
+        { face: faceMid(2, 3), dir: { x: nx, y: ny } },
       ];
-      // On ignore les faces de CETTE cloison pour ne pas se mesurer à soi-même.
-      const own = new Set(partRects.slice(ri - 1, ri).flatMap((r) => r.map((p) => `${Math.round(p.x)},${Math.round(p.y)}`)));
+      const own = new Set(rect.map((p) => `${Math.round(p.x)},${Math.round(p.y)}`));
 
       for (const { face, dir } of sides) {
         let best = Infinity;
@@ -1739,10 +1743,24 @@ function drawPartitionGaps(ctx: CanvasRenderingContext2D, room: Room, v: View) {
           if (t < best) best = t;
         }
         if (!Number.isFinite(best) || best < 1 || best > 2000) continue;
-        // Un peu à l'écart du milieu du mur, pour ne pas superposer les deux cotes opposées.
-        const off = 0; // sur l'axe de la cote
-        const o = { x: face.x + ux * off, y: face.y + uy * off };
-        const hit = { x: o.x + dir.x * best, y: o.y + dir.y * best };
+        gaps.push({ o: face, hit: { x: face.x + dir.x * best, y: face.y + dir.y * best }, ux, uy, dist: best });
+      }
+    }
+  }
+
+  // Dédoublonnage : deux cotes qui couvrent le même segment (mêmes extrémités, à ~1 cm près).
+  const seen = new Set<string>();
+  const unique = gaps.filter((g) => {
+    const e1 = `${Math.round(g.o.x)},${Math.round(g.o.y)}`;
+    const e2 = `${Math.round(g.hit.x)},${Math.round(g.hit.y)}`;
+    const key = e1 < e2 ? `${e1}|${e2}` : `${e2}|${e1}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  for (const g of unique) {
+        const { o, hit, ux, uy } = g;
         const s0 = worldToScreen(o, v), s1 = worldToScreen(hit, v);
         ctx.strokeStyle = 'rgba(180,83,9,0.85)';
         ctx.fillStyle = '#9a3412';
@@ -1751,15 +1769,14 @@ function drawPartitionGaps(ctx: CanvasRenderingContext2D, room: Room, v: View) {
         ctx.beginPath(); ctx.moveTo(s0.x, s0.y); ctx.lineTo(s1.x, s1.y); ctx.stroke();
         ctx.setLineDash([]);
         // Repères aux DEUX extrémités : on voit d'où part et où s'arrête la cote (sur les faces).
-        const tpx = -uy * 6, tpy = ux * 6; // perpendiculaire à la cote (le long des faces)
-        const stpx = tpx, stpy = tpy;
+        const stpx = -uy * 6, stpy = ux * 6;
         for (const s of [s0, s1]) {
           ctx.beginPath();
           ctx.moveTo(s.x + stpx, s.y + stpy); ctx.lineTo(s.x - stpx, s.y - stpy);
           ctx.stroke();
           ctx.beginPath(); ctx.arc(s.x, s.y, 2.5, 0, Math.PI * 2); ctx.fill();
         }
-        const txt = `${(Math.round(best * 10) / 10).toFixed(1).replace('.0', '')}`;
+        const txt = `${(Math.round(g.dist * 10) / 10).toFixed(1).replace('.0', '')}`;
         const mx = (s0.x + s1.x) / 2, my = (s0.y + s1.y) / 2;
         const w = ctx.measureText(txt).width + 8;
         ctx.fillStyle = '#fff7ed';
@@ -1768,8 +1785,6 @@ function drawPartitionGaps(ctx: CanvasRenderingContext2D, room: Room, v: View) {
         ctx.fill(); ctx.stroke();
         ctx.fillStyle = '#9a3412';
         ctx.fillText(txt, mx, my + 0.5);
-      }
-    }
   }
   ctx.restore();
 }
