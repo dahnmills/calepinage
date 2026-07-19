@@ -88,6 +88,12 @@ export interface SnapContext {
    * existantes). Sans ça, impossible de raccorder une cloison au mur qu'elle rejoint.
    */
   guides?: Guide[];
+  /**
+   * Seuil d'accroche aux `guides` (cm). Distinct de `vertexThreshold` : il ne rétrécit pas
+   * quand on zoome, sinon on ne parvient jamais à caler pile sur un mur en zoomant pour
+   * être précis — d'où le petit décroché persistant entre cloisons.
+   */
+  guideThreshold?: number;
 }
 
 export interface Guide {
@@ -193,9 +199,13 @@ export function snapDrawPoint(ctx: SnapContext): SnapResult {
   }
 
   const guides = ctx.guides ?? [];
+  // Accroche aux murs/cloisons : seuil au moins aussi large que `vertexThreshold`, avec un
+  // plancher fixe (cm) qui ne rétrécit pas au zoom. Sinon on ne cale jamais pile sur un mur
+  // en zoomant, et il reste ce décroché de quelques millimètres entre cloisons.
+  const gTh = Math.max(vertexThreshold, ctx.guideThreshold ?? 0);
 
   // Accroche à un ANGLE de mur : c'est là qu'on veut raccorder, l'angle du segment cède.
-  const corner = guides.length ? snapToGuideVertex(guides, raw, vertexThreshold) : null;
+  const corner = guides.length ? snapToGuideVertex(guides, raw, gTh) : null;
   if (corner) {
     return {
       point: corner, closing: false, onVertex: -1,
@@ -208,14 +218,14 @@ export function snapDrawPoint(ctx: SnapContext): SnapResult {
   if (last && snapAngle && guides.length) {
     const a = snapAngleFrom(last, snapGrid ? snapToGrid(raw, gridStep) : raw, angleStep).angle;
     const dir = dirFromAngle(a);
-    const hit = angleHitGuides(guides, last, dir, raw, vertexThreshold * 1.6);
+    const hit = angleHitGuides(guides, last, dir, raw, gTh * 1.6);
     if (hit) {
       return { point: hit, closing: false, onVertex: -1, angle: a, length: lenTo(hit), onGuide: 'edge' };
     }
   }
 
   // Sinon : projection simple sur le tracé d'un mur (angle libre).
-  const g = guides.length ? snapToGuides(guides, raw, vertexThreshold) : null;
+  const g = guides.length ? snapToGuides(guides, raw, gTh) : null;
   if (g) {
     return { point: g.point, closing: false, onVertex: -1, angle: last ? angleDeg(sub(g.point, last)) : null, length: lenTo(g.point), onGuide: g.kind };
   }

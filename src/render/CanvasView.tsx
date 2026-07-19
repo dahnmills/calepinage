@@ -419,6 +419,9 @@ export default function CanvasView({ highlightCuts, showNumbers }: { highlightCu
     const res = snapDrawPoint({
       points: drawing, raw, gridStep: editor.gridStep, snapGrid: editor.snapGrid,
       snapAngle: editor.snapAngle, angleStep: editor.angleStep, vertexThreshold: vThresh(),
+      // Plancher d'accroche aux murs/cloisons : ~10 cm quel que soit le zoom, pour caler
+      // pile sur un mur voisin même en zoomant, sans laisser de décroché.
+      guideThreshold: 10,
       guides,
       ...ov,
     });
