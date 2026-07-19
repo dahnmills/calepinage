@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import polygonClipping, { type MultiPolygon, type Polygon, type Ring } from 'polygon-clipping';
 import { useStore } from '../store/useStore';
-import { polygonBBox, pointInPolygon, partitionRects, offsetPolygon } from '../model/geometry';
+import { polygonBBox, pointInPolygon, partitionRects } from '../model/geometry';
 import { ghostRows, poseDirection, poseFrame, type GhostRow, type PoseFrame } from '../model/startline';
 import { detectSpaces, spaceCentroid, type Space } from '../model/spaces';
 import { flattenPacks, packIdOf } from '../model/stock';
@@ -1677,32 +1677,58 @@ function drawSelection(
  * se coupent net, y compris sur les murs obliques.
  */
 function drawExteriorWalls(ctx: CanvasRenderingContext2D, poly: Point[], thickness: number, v: View) {
-  // `poly` est le nu intérieur : l'épaisseur est portée entièrement vers l'extérieur.
-  const inner = poly;
-  const outer = offsetPolygon(poly, -thickness);
+  const n = poly.length;
+  if (n < 3 || thickness <= 0) return;
+  // `poly` est le nu intérieur : l'épaisseur part entièrement vers l'extérieur. On construit
+  // la bande comme l'UNION d'un rectangle par arête (porté vers l'extérieur), au lieu d'un
+  // polygone décalé « en onglet ». L'onglet (offsetPolygon) fait fuir le sommet à l'infini
+  // aux angles aigus/rentrants (encoches), d'où les pointes géométriques parasites ; l'union
+  // de rectangles reste franche quelle que soit la forme.
+  const eps = 0.01;
+  const rects: Point[][] = [];
+  for (let i = 0; i < n; i++) {
+    const a = poly[i], b = poly[(i + 1) % n];
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const l = Math.hypot(dx, dy) || 1;
+    const ux = dx / l, uy = dy / l;
+    let nx = -uy, ny = ux; // normale gauche
+    const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    // On veut la normale EXTÉRIEURE : si l'intérieur du polygone est de ce côté, on l'inverse.
+    if (pointInPolygon({ x: mid.x + nx * eps, y: mid.y + ny * eps }, poly)) { nx = -nx; ny = -ny; }
+    // Rallonge tangentielle aux deux bouts pour souder les coins (le périmètre est fermé,
+    // donc aucune extrémité libre) : les rectangles voisins se recouvrent, pas de vide au coin.
+    const ex = ux * thickness, ey = uy * thickness;
+    const a2 = { x: a.x - ex, y: a.y - ey }, b2 = { x: b.x + ex, y: b.y + ey };
+    rects.push([
+      { x: a2.x, y: a2.y },
+      { x: b2.x, y: b2.y },
+      { x: b2.x + nx * thickness, y: b2.y + ny * thickness },
+      { x: a2.x + nx * thickness, y: a2.y + ny * thickness },
+    ]);
+  }
 
-  const trace = (pts: Point[], reverse: boolean) => {
-    const list = reverse ? [...pts].reverse() : pts;
-    list.forEach((p, i) => {
-      const s = worldToScreen(p, v);
-      if (i === 0) ctx.moveTo(s.x, s.y); else ctx.lineTo(s.x, s.y);
-    });
-    ctx.closePath();
-  };
+  const rings: Ring[] = rects.map((r) => r.map((p) => [p.x, p.y] as [number, number]));
+  const polys = rings.map((r) => [r] as Polygon);
+  let union: MultiPolygon;
+  try {
+    union = polygonClipping.union(polys[0], ...polys.slice(1));
+  } catch {
+    union = polys;
+  }
 
-  // Anneau : contour extérieur + contour intérieur en sens inverse, rempli en non-zero.
-  ctx.beginPath();
-  trace(outer, false);
-  trace(inner, true);
   ctx.fillStyle = '#b8c0cc';
-  ctx.fill();
-
-  // Faces franches.
   ctx.strokeStyle = '#64748b';
   ctx.lineWidth = 1;
-  for (const face of [outer, inner]) {
+  for (const p of union) {
     ctx.beginPath();
-    trace(face, false);
+    for (const ring of p) {
+      ring.forEach(([x, y], k) => {
+        const s = worldToScreen({ x, y }, v);
+        if (k === 0) ctx.moveTo(s.x, s.y); else ctx.lineTo(s.x, s.y);
+      });
+      ctx.closePath();
+    }
+    ctx.fill('evenodd');
     ctx.stroke();
   }
 }
