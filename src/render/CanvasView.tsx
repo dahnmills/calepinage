@@ -1686,8 +1686,8 @@ function drawExteriorWalls(ctx: CanvasRenderingContext2D, poly: Point[], thickne
   // PLAFONNE (miterLimit) et on retombe sur un chanfrein (deux points) au-delà. D'où : ni
   // pointe parasite aux angles aigus, ni ergot qui dépasse aux nœuds.
   const eps = 0.01;
-  const miterLimit = 2.5; // au-delà, on chanfreine plutôt que de laisser filer la pointe
-  // Décalage extérieur de chaque arête : point de départ décalé + direction unitaire.
+  const miterLimit = 2.5; // au-delà, coin chanfreiné plutôt que pointe qui file
+  // Décalage extérieur de chaque arête (A,B = extrémités décalées, dir = sens de l'arête).
   const seg = poly.map((a, i) => {
     const b = poly[(i + 1) % n];
     const dx = b.x - a.x, dy = b.y - a.y;
@@ -1696,48 +1696,59 @@ function drawExteriorWalls(ctx: CanvasRenderingContext2D, poly: Point[], thickne
     let nrm = { x: -dir.y, y: dir.x };
     const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
     if (pointInPolygon({ x: mid.x + nrm.x * eps, y: mid.y + nrm.y * eps }, poly)) nrm = { x: -nrm.x, y: -nrm.y };
-    return { A: { x: a.x + nrm.x * thickness, y: a.y + nrm.y * thickness }, B: { x: b.x + nrm.x * thickness, y: b.y + nrm.y * thickness }, dir };
+    return {
+      a, b, dir,
+      A: { x: a.x + nrm.x * thickness, y: a.y + nrm.y * thickness },
+      B: { x: b.x + nrm.x * thickness, y: b.y + nrm.y * thickness },
+    };
   });
   const lineX = (p1: Point, d1: Point, p2: Point, d2: Point): Point | null => {
     const den = d1.x * d2.y - d1.y * d2.x;
-    if (Math.abs(den) < 1e-9) return null; // arêtes ~parallèles
+    if (Math.abs(den) < 1e-9) return null;
     const t = ((p2.x - p1.x) * d2.y - (p2.y - p1.y) * d2.x) / den;
     return { x: p1.x + d1.x * t, y: p1.y + d1.y * t };
   };
-  const outer: Point[] = [];
+
+  // La bande = union (polygon-clipping) des rectangles d'arête + un coin de remblai par
+  // sommet. Pas d'extension tangentielle (donc aucun ergot au nœud), et le coin ferme le
+  // vide extérieur des jonctions : onglet CARRÉ quand le coin pointe vers l'extérieur
+  // (convexe), chanfrein (triangle) sinon — jamais de trou, jamais de pointe qui file.
+  const parts: Point[][] = [];
+  for (let i = 0; i < n; i++) parts.push([seg[i].a, seg[i].b, seg[i].B, seg[i].A]);
   for (let i = 0; i < n; i++) {
     const prev = seg[(i + n - 1) % n], cur = seg[i];
-    const v0 = poly[i];
-    const m = lineX(prev.B, prev.dir, cur.A, cur.dir);
-    if (m && Math.hypot(m.x - v0.x, m.y - v0.y) <= miterLimit * thickness) {
-      outer.push(m); // onglet franc
+    const V = poly[i], P1 = prev.B, P2 = cur.A;
+    const m = lineX(P1, prev.dir, P2, cur.dir);
+    // Coin extérieur (convexe) : l'onglet tombe HORS du polygone et pas trop loin -> cerf-volant.
+    if (m && !pointInPolygon(m, poly) && Math.hypot(m.x - V.x, m.y - V.y) <= miterLimit * thickness) {
+      parts.push([V, P1, m, P2]);
     } else {
-      outer.push(prev.B); outer.push(cur.A); // chanfrein : borne la pointe
+      parts.push([V, P1, P2]); // chanfrein (sommet rentrant : remblai inoffensif)
     }
   }
 
-  const trace = (pts: Point[], reverse: boolean) => {
-    const list = reverse ? [...pts].reverse() : pts;
-    list.forEach((p, i) => {
-      const s = worldToScreen(p, v);
-      if (i === 0) ctx.moveTo(s.x, s.y); else ctx.lineTo(s.x, s.y);
-    });
-    ctx.closePath();
-  };
+  const rings: Ring[] = parts.map((r) => r.map((p) => [p.x, p.y] as [number, number]));
+  const polys = rings.map((r) => [r] as Polygon);
+  let union: MultiPolygon;
+  try {
+    union = polygonClipping.union(polys[0], ...polys.slice(1));
+  } catch {
+    union = polys;
+  }
 
-  // Anneau plein : contour extérieur + contour intérieur en sens inverse (even-odd).
-  ctx.beginPath();
-  trace(outer, false);
-  trace(poly, true);
   ctx.fillStyle = '#b8c0cc';
-  ctx.fill('evenodd');
-
-  // Faces franches.
   ctx.strokeStyle = '#64748b';
   ctx.lineWidth = 1;
-  for (const face of [outer, poly]) {
+  for (const p of union) {
     ctx.beginPath();
-    trace(face, false);
+    for (const ring of p) {
+      ring.forEach(([x, y], k) => {
+        const s = worldToScreen({ x, y }, v);
+        if (k === 0) ctx.moveTo(s.x, s.y); else ctx.lineTo(s.x, s.y);
+      });
+      ctx.closePath();
+    }
+    ctx.fill('evenodd');
     ctx.stroke();
   }
 }
