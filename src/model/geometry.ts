@@ -233,6 +233,40 @@ function lineIntersect(p1: Point, d1: Point, p2: Point, d2: Point): Point | null
   return { x: p1.x + d1.x * t, y: p1.y + d1.y * t };
 }
 
+export type PartitionLike = { points: Point[]; thickness: number; align?: WallAlign };
+
+/**
+ * Côté vers lequel porter l'épaisseur : vers le CREUX de la polyligne (le côté concave),
+ * pour que les dimensions extérieures = les longueurs tracées (une cloison en L de 60×30
+ * encombre 60×30, on n'ajoute pas l'épaisseur du bras perpendiculaire). Le côté dépend du
+ * sens de tracé : on le déduit de l'aire signée. Cloison droite (aire ~0) : pas de creux,
+ * on garde le réglage choisi (défaut = une face, jamais l'axe milieu).
+ */
+export function partitionAlign(pts: Point[], align?: WallAlign): WallAlign {
+  let area = 0;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    area += (pts[j].x + pts[i].x) * (pts[j].y - pts[i].y);
+  }
+  if (Math.abs(area) < 1e-6) return align === 'right' ? 'right' : 'left';
+  return area > 0 ? 'left' : 'right';
+}
+
+/**
+ * Rectangles d'épaisseur d'UNE cloison : exactement un par segment, dans l'ordre des
+ * points DÉDOUBLONNÉS, sans les remblais d'onglet. À utiliser dès qu'il faut faire
+ * correspondre un rectangle à un segment précis (cotes face à face) — `partitionRects`
+ * mélange arêtes et remblais et ne peut pas être indexé segment par segment.
+ */
+export function partitionEdgeRects(p: PartitionLike): { pts: Point[]; align: WallAlign; rects: Point[][] } {
+  const pts = dedupePoints(p.points);
+  const align = partitionAlign(pts, p.align);
+  const rects: Point[][] = [];
+  for (let i = 0; i < pts.length - 1; i++) {
+    rects.push(segmentRect(pts[i], pts[i + 1], p.thickness, align, false, false));
+  }
+  return { pts, align, rects };
+}
+
 /**
  * Emprises (rectangles) de toutes les cloisons, PLUS un remblai d'angle par sommet
  * intérieur. Chaque segment garde EXACTEMENT sa longueur tracée (la face plate ne
@@ -240,30 +274,15 @@ function lineIntersect(p1: Point, d1: Point, p2: Point, d2: Point): Point | null
  * jonction carrée nette sans rien ajouter à la longueur. Angle très aigu : l'onglet
  * est plafonné (chanfrein) pour ne pas laisser filer une pointe.
  */
-export function partitionRects(
-  partitions: { points: Point[]; thickness: number; align?: WallAlign }[],
-): Point[][] {
+export function partitionRects(partitions: PartitionLike[]): Point[][] {
   const miterLimit = 3;
   const rects: Point[][] = [];
   for (const p of partitions) {
-    const pts = dedupePoints(p.points);
+    const { pts, align, rects: edges } = partitionEdgeRects(p);
     const t = p.thickness;
-    // Côté de l'épaisseur : on la porte vers le CREUX de la polyligne (le côté concave),
-    // pour que les dimensions extérieures = les longueurs tracées (une cloison en L de
-    // 60×30 encombre 60×30, on n'ajoute pas l'épaisseur du bras perpendiculaire). Le côté
-    // dépend du sens de tracé : on le déduit de l'aire signée. Cloison droite (aire ~0) :
-    // pas de creux, on garde le réglage choisi (défaut = une face, jamais l'axe milieu).
-    let area = 0;
-    for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
-      area += (pts[j].x + pts[i].x) * (pts[j].y - pts[i].y);
-    }
-    const align: WallAlign = Math.abs(area) < 1e-6 ? (p.align === 'right' ? 'right' : 'left')
-      : area > 0 ? 'left' : 'right';
     const near = align === 'left' ? -t : 0;
     const far = near + t;
-    for (let i = 0; i < pts.length - 1; i++) {
-      rects.push(segmentRect(pts[i], pts[i + 1], t, align, false, false));
-    }
+    rects.push(...edges);
     // Remblai d'onglet à chaque sommet interne.
     for (let i = 1; i < pts.length - 1; i++) {
       const A = pts[i - 1], V = pts[i], B = pts[i + 1];

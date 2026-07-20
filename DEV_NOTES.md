@@ -84,6 +84,19 @@ exacte au lieu de deviner.
 - Cloisons : trace = FACE (fin du centrage axe) + onglet plein soudé (remblai par sommet V).
 - Cloisons : épaisseur vers le creux du L (dimensions ext = longueurs tracées, côté par aire signée).
 - Garde-fou ErrorBoundary + try/catch sur la boucle de rendu.
+- Cotes auto face à face : fin du désalignement rectangle/segment (voir ci-dessous).
+
+### Piège : `partitionRects` n'est PAS indexable par segment
+
+`partitionRects` renvoie, à la suite, les rectangles d'arête **et** les remblais d'onglet
+(2 par sommet interne). Indexer son résultat avec un compteur « un rect par segment » se
+désynchronise dès la 1ʳᵉ cloison en L, et toutes les cloisons suivantes tapent dans un
+remblai (triangle à 3 points → face `[2],[3]` = NaN). Symptôme : cotes auto absentes sur
+certaines cloisons, aberrantes sur d'autres.
+
+→ Utiliser **`partitionEdgeRects(cloison)`** (`src/model/geometry.ts`) : renvoie
+`{ pts, align, rects }` avec exactement un rect par segment, sur les points **dédoublonnés**
+(parcourir `pts`, jamais `partition.points` brut).
 
 ---
 

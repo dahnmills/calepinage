@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import polygonClipping, { type MultiPolygon, type Polygon, type Ring } from 'polygon-clipping';
 import { useStore } from '../store/useStore';
-import { polygonBBox, pointInPolygon, partitionRects, dedupePoints } from '../model/geometry';
+import { polygonBBox, pointInPolygon, partitionRects, partitionEdgeRects, dedupePoints } from '../model/geometry';
 import { ghostRows, poseDirection, poseFrame, type GhostRow, type PoseFrame } from '../model/startline';
 import { detectSpaces, spaceCentroid, type Space } from '../model/spaces';
 import { flattenPacks, packIdOf } from '../model/stock';
@@ -1963,8 +1963,9 @@ function drawPartitionGaps(ctx: CanvasRenderingContext2D, room: Room, v: View, o
   const obstacles: [Point, Point][] = [];
   const n = room.points.length;
   for (let i = 0; i < n; i++) obstacles.push([room.points[i], room.points[(i + 1) % n]]);
-  const partRects = partitionRects(room.partitions);
-  for (const r of partRects) for (let i = 0; i < r.length; i++) obstacles.push([r[i], r[(i + 1) % r.length]]);
+  for (const r of partitionRects(room.partitions)) {
+    for (let i = 0; i < r.length; i++) obstacles.push([r[i], r[(i + 1) % r.length]]);
+  }
 
   ctx.save();
   ctx.font = '600 11px system-ui';
@@ -1974,15 +1975,17 @@ function drawPartitionGaps(ctx: CanvasRenderingContext2D, room: Room, v: View, o
   // On collecte d'abord toutes les cotes, puis on dédoublonne : l'écart entre deux cloisons
   // est mesuré des deux côtés (chacune vers l'autre) et donnerait deux fois la même cote.
   const gaps: { o: Point; hit: Point; ux: number; uy: number; dist: number }[] = [];
-  let ri = 0;
   for (const wall of room.partitions) {
-    for (let si = 0; si < wall.points.length - 1; si++) {
-      const rect = partRects[ri++];
+    // Pendant le tracé : on ne mesure QUE depuis la cloison en cours (les autres ont déjà
+    // leurs cotes affichées par ailleurs).
+    if (onlyId && wall.id !== onlyId) continue;
+    // Un rectangle par segment, sur les MÊMES points (dédoublonnés) que ceux parcourus ici :
+    // `partitionRects` intercale les remblais d'onglet, on ne peut pas l'indexer par segment.
+    const { pts, rects } = partitionEdgeRects(wall);
+    for (let si = 0; si < pts.length - 1; si++) {
+      const rect = rects[si];
       if (!rect) continue;
-      // Pendant le tracé : on ne mesure QUE depuis la cloison en cours (les autres ont déjà
-      // leurs cotes affichées par ailleurs).
-      if (onlyId && wall.id !== onlyId) continue;
-      const a = wall.points[si], b = wall.points[si + 1];
+      const a = pts[si], b = pts[si + 1];
       const len = Math.hypot(b.x - a.x, b.y - a.y);
       if (len < 1) continue;
       const ux = (b.x - a.x) / len, uy = (b.y - a.y) / len;
@@ -2052,7 +2055,8 @@ function drawPartitionGaps(ctx: CanvasRenderingContext2D, room: Room, v: View, o
 }
 
 /** Cotes d'une cloison : longueur de chaque segment, en gris foncé (couleur des cloisons). */
-function drawPartitionDims(ctx: CanvasRenderingContext2D, pts: Point[], v: View) {
+function drawPartitionDims(ctx: CanvasRenderingContext2D, raw: Point[], v: View) {
+  const pts = dedupePoints(raw);
   ctx.font = '600 11px system-ui';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
