@@ -147,6 +147,21 @@ export interface LayoutConfig {
   /** Longueur minimale d'une coupe posée / d'une chute réutilisable (cm). */
   minCutLength: number;
   /**
+   * Largeur minimale d'une rangée de rive après refend (cm). En deçà, la trame est décalée
+   * pour répartir le reste sur les deux rives — un filet de 7 mm ne se pose pas, il casse à
+   * la scie. Quick-Step : « the width of the first and last row should be at least 5 cm ».
+   * Aucun NF DTU ne fixe cette valeur ; c'est une exigence de notice fabricant.
+   */
+  minRipWidth: number;
+  /**
+   * Interdit de servir à une rangée une chute issue d'une lame déjà posée dans la rangée
+   * voisine. Deux morceaux du même bois côte à côte, c'est le même veinage répété — les
+   * guidelines NWFA demandent au contraire de puiser dans plusieurs paquets.
+   * Coûteux : mesuré sur 120 simulations, la chute passe de 3,4 % à 4,5 % et les coupes
+   * de 69 à 97. À l'utilisateur d'arbitrer.
+   */
+  avoidSamePlank: boolean;
+  /**
    * Décalage minimal entre les joints de deux rangées voisines (cm). Règle de pose : des
    * joints alignés d'une rangée à l'autre sont laids et affaiblissent le plancher. 30 cm
    * est l'usage courant. 0 = aucune contrainte.
@@ -279,6 +294,14 @@ export interface LayoutStats {
   cuts: number;
   /** Coupes en longueur (refends) : lames à passer à la scie sur le chant. */
   ripCuts: number;
+  /**
+   * Filets trop étroits pour être posés, écartés du plan. Ils tombent en rive, sous la
+   * plinthe et dans le jeu de dilatation. Les annoncer reviendrait à demander au poseur de
+   * scier une bande de quelques millimètres — impossible en pratique.
+   */
+  droppedSlivers: number;
+  /** Plus petite largeur après refend réellement posée (cm). */
+  minRipWidth: number;
   /** Lames posées faute de stock : la pièce est calepinée, mais il faut les acheter. */
   missingPlanks: number;
   wasteAreaM2: number;

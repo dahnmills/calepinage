@@ -81,7 +81,8 @@ export function computeLayout(room: Room, batches: PlankBatch[], config: LayoutC
     spaces: [],
     stats: {
       spaces: [], excludedAreaM2: 0, roomAreaM2: 0, laidAreaM2: 0, planksPlaced: 0, newPlanksUsed: 0,
-      offcutsReused: 0, cuts: 0, ripCuts: 0, missingPlanks: 0, wasteAreaM2: 0, wastePct: 0,
+      offcutsReused: 0, cuts: 0, ripCuts: 0, droppedSlivers: 0, minRipWidth: 0,
+      missingPlanks: 0, wasteAreaM2: 0, wastePct: 0,
       batchUsage: [], shortage: [],
       perimeterM: 0, doorCount: 0, plintheM: 0, partitionM: 0,
       stagger: { min: 0, median: 0, below: 0, total: 0, target: 0, recommended: 0 },
@@ -188,7 +189,21 @@ export function computeLayout(room: Room, batches: PlankBatch[], config: LayoutC
     return Number.isFinite(min) ? max - min : 0;
   };
 
-  const placed: PlacedPlank[] = placedCentered.map((pl) => {
+  // Un filet de quelques millimètres de large ne se pose pas : il casse à la scie, et
+  // aucun poseur ne le taillerait. En bord de pièce il disparaît sous la plinthe et dans le
+  // jeu de dilatation ; ailleurs, l'annoncer sur le plan revient à demander l'impossible.
+  // On l'écarte donc du calepinage plutôt que de le facturer et de le dessiner.
+  const minRip = Math.max(0, config.minRipWidth ?? 0);
+  const skinny = (pl: (typeof placedCentered)[number]) => {
+    if (minRip <= 0) return false;
+    const len = Math.min(pl.length, usedLengthOf(pl));
+    if (len <= 1e-3) return true;
+    const area = pl.pieces.reduce((s, pc) => s + polygonArea(pc), 0);
+    return Math.min(pl.width, area / len) < minRip - 1e-6;
+  };
+  const droppedSlivers = placedCentered.filter(skinny).length;
+
+  const placed: PlacedPlank[] = placedCentered.filter((pl) => !skinny(pl)).map((pl) => {
     const usedLength = Math.min(pl.length, usedLengthOf(pl));
     const packNo = packNoById.get(pl.packId) ?? 0;
     const visibleArea = pl.pieces.reduce((s, pc) => s + polygonArea(pc), 0);
@@ -300,6 +315,9 @@ export function computeLayout(room: Room, batches: PlankBatch[], config: LayoutC
       offcutsReused: inventory.offcutsReused,
       cuts: inventory.cuts,
       ripCuts,
+      droppedSlivers,
+      minRipWidth: placed.length
+        ? +Math.min(...placed.map((pl) => pl.usedWidth)).toFixed(1) : 0,
       missingPlanks,
       wasteAreaM2: +cm2ToM2(wasteCm2).toFixed(3),
       wastePct: stockAreaCm2 > 0 ? +((wasteCm2 / stockAreaCm2) * 100).toFixed(1) : 0,

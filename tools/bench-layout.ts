@@ -35,11 +35,35 @@ export interface Metrics {
   wastePct: number;
   cuts: number;
   underMinCut: number;
+  /**
+   * Plus longue BANDE de rangées consécutives portant un joint à la même position (±2 cm).
+   * Les métriques par PAIRES ne voient pas une ligne qui traverse dix rangées : elles
+   * comparent n avec n−1 et concluent que tout va bien. C'est précisément le défaut que
+   * l'utilisateur voyait pendant que le banc annonçait 0,3 joint collé.
+   */
+  bandMax: number;
+  /**
+   * Lames voisines issues de la MÊME lame physique (`plankNo`). Même veinage, même teinte
+   * côte à côte : proscrit par les guidelines NWFA (« work from multiple bundles »).
+   */
+  samePlank: number;
+  /** Plus court morceau posé (cm) — doit rester ≥ `minCutLength`. */
+  minPiece: number;
+  /** Plus petite largeur après refend (cm) : une bande de 0,7 cm est inposable. */
+  minRip: number;
 }
 
-type Seg = { x0: number; x1: number };
+type Seg = { x0: number; x1: number; plankNo: number };
 
-/** Rangées reconstruites dans le repère de pose, groupées par pièce puis par y. */
+/**
+ * Rangées reconstruites dans le repère de pose, groupées par y SEUL.
+ *
+ * Volontairement pas par pièce : `detectSpaces` découpe aussi sur les trous, donc deux
+ * « espaces » peuvent être physiquement adjacents sans cloison entre eux. Les grouper
+ * séparément masquait les alignements de part et d'autre. Deux lames d'espaces différents
+ * au même y sont bien dans la même bande physique ; un vrai mur entre elles ne crée pas de
+ * faux joint, puisqu'un joint exige qu'une lame reprenne à moins de 1,5 cm.
+ */
 function rowsOf(placed: any[], orientationDeg: number): Seg[][] {
   const a = (-orientationDeg * Math.PI) / 180;
   const un = (p: Point) => ({ x: p.x * Math.cos(a) - p.y * Math.sin(a), y: p.x * Math.sin(a) + p.y * Math.cos(a) });
@@ -47,25 +71,18 @@ function rowsOf(placed: any[], orientationDeg: number): Seg[][] {
   for (const pl of placed) {
     const r = pl.rect.map(un);
     const ys = r.map((p: Point) => p.y), xs = r.map((p: Point) => p.x);
-    const key = `${pl.spaceIndex}|${(Math.round(Math.min(...ys) * 10) / 10).toFixed(1)}`;
+    const key = (Math.round(Math.min(...ys) * 10) / 10).toFixed(1);
     if (!by.has(key)) by.set(key, []);
-    by.get(key)!.push({ x0: Math.min(...xs), x1: Math.max(...xs) });
+    by.get(key)!.push({ x0: Math.min(...xs), x1: Math.max(...xs), plankNo: pl.plankNo });
   }
-  const keys = [...by.keys()].sort((k1, k2) => {
-    const [s1, y1] = k1.split('|'), [s2, y2] = k2.split('|');
-    return s1 === s2 ? parseFloat(y1) - parseFloat(y2) : +s1 - +s2;
-  });
-  // On ne garde que des rangées CONTIGUËS d'une même pièce : comparer deux rangées
-  // séparées par un vide n'a aucun sens.
+  const keys = [...by.keys()].sort((k1, k2) => parseFloat(k1) - parseFloat(k2));
+  // Deux rangées séparées par un vide (étage de la pièce, décrochement) ne se comparent pas :
+  // on insère une coupure pour que les métriques ne les traitent pas comme voisines.
   const out: Seg[][] = [];
   let prev: string | null = null;
   for (const k of keys) {
-    const [sp, y] = k.split('|');
     const segs = by.get(k)!.sort((p, q) => p.x0 - q.x0);
-    if (prev) {
-      const [ps, py] = prev.split('|');
-      if (ps !== sp || Math.abs(parseFloat(y) - parseFloat(py)) > 12.6) out.push([]); // coupure
-    }
+    if (prev && Math.abs(parseFloat(k) - parseFloat(prev)) > 12.6) out.push([]); // coupure
     out.push(segs);
     prev = k;
   }
@@ -78,7 +95,8 @@ const jointsOf = (segs: Seg[]): number[] =>
 
 export function measure(room: Room, batches: PlankBatch[], config: LayoutConfig): Metrics {
   const res: any = computeLayout(room, batches, config);
-  const rows = rowsOf(res.placed, config.orientationDeg).map(jointsOf);
+  const bands = rowsOf(res.placed, config.orientationDeg);
+  const rows = bands.map(jointsOf);
   const minOffset = config.minJointOffset ?? 0;
 
   let joints = 0, viol1 = 0, flush1 = 0, a2 = 0, a2tot = 0;
@@ -119,7 +137,35 @@ export function measure(room: Room, batches: PlankBatch[], config: LayoutConfig)
     if (Math.abs(d1) > 5 && Math.abs(d1 - d2) < 2) stair++;
   }
 
+  // BANDE : combien de rangées CONSÉCUTIVES portent un joint au même endroit. C'est la
+  // « ligne en travers » du plancher — invisible à toute métrique qui compare des paires.
+  let bandMax = 0;
+  for (let i = 0; i < rows.length; i++) {
+    for (const j of rows[i]) {
+      let run = 1;
+      for (let k = i + 1; k < rows.length; k++) {
+        if (!rows[k].some((v) => Math.abs(v - j) <= 2)) break;
+        run++;
+      }
+      if (run > bandMax) bandMax = run;
+    }
+  }
+
+  // Deux morceaux de la MÊME lame physique dans des rangées voisines, et qui se chevauchent
+  // le long de la rangée : c'est là que l'œil voit le même veinage deux fois.
+  let samePlank = 0;
+  for (let i = 1; i < bands.length; i++) {
+    for (const a of bands[i]) {
+      if (!a.plankNo) continue;
+      for (const b of bands[i - 1]) {
+        if (b.plankNo !== a.plankNo) continue;
+        if (Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0) > 1) { samePlank++; break; }
+      }
+    }
+  }
+
   const lens = res.placed.map((p: any) => p.usedLength).filter((l: number) => l > 0.05);
+  const rips = res.placed.map((p: any) => p.usedWidth).filter((w: number) => w > 0.05);
   const sorted = gaps.slice().sort((p, q) => p - q);
   const pct = (n: number, d: number) => (d ? +((n / d) * 100).toFixed(1) : 0);
 
@@ -136,6 +182,10 @@ export function measure(room: Room, batches: PlankBatch[], config: LayoutConfig)
     wastePct: +res.stats.wastePct.toFixed(1),
     cuts: res.stats.cuts,
     underMinCut: lens.filter((l: number) => l < (config.minCutLength ?? 0) - 0.05).length,
+    bandMax,
+    samePlank,
+    minPiece: lens.length ? +Math.min(...lens).toFixed(1) : 0,
+    minRip: rips.length ? +Math.min(...rips).toFixed(1) : 0,
   };
 }
 
@@ -146,9 +196,24 @@ const rect = (w: number, h: number): Room => ({
   holes: [], doors: [], partitions: [], spaceTags: [],
 } as any);
 
+const BASE: LayoutConfig = {
+  patternId: 'straight', orientationDeg: 0, offsetMode: '1/3', jointGap: 0,
+  minCutLength: 30, minJointOffset: 30, minRipWidth: 5, avoidSamePlank: true,
+  reuseOffcuts: true, cutTolerance: 1,
+  mixLengths: true, mixPacks: true, preferShort: false, exteriorWallThickness: 20,
+  expansionGap: 0.8, optimizeStart: true, startFlip: false, wastePurchasePct: 10, seed: 12345,
+} as any;
+
 function loadJson(path: string) {
   const d = JSON.parse(fs.readFileSync(path, 'utf8'));
-  return { room: d.room as Room, batches: flattenPacks(d.packs), config: d.config as LayoutConfig };
+  // Comme `loadInto` dans le store : un projet enregistré avant l'ajout d'un réglage doit
+  // hériter de sa valeur par défaut, sinon le banc mesure une configuration qui n'existe
+  // dans l'app d'aucun utilisateur.
+  return {
+    room: d.room as Room,
+    batches: flattenPacks(d.packs),
+    config: { ...BASE, ...d.config } as LayoutConfig,
+  };
 }
 
 const REAL = [
@@ -172,13 +237,6 @@ const STOCKS: Record<string, PlankBatch[]> = {
   'heteroclite': synthBatches([[40, 25], [50, 44], [60, 81], [70, 23], [80, 57], [90, 55], [120, 20], [140, 11], [160, 10]]),
   'longues-dominantes': synthBatches([[160, 150], [140, 60], [90, 30], [60, 20]]),
 };
-
-const BASE: LayoutConfig = {
-  patternId: 'straight', orientationDeg: 0, offsetMode: '1/3', jointGap: 0,
-  minCutLength: 30, minJointOffset: 30, reuseOffcuts: true, cutTolerance: 1,
-  mixLengths: true, mixPacks: true, preferShort: false, exteriorWallThickness: 20,
-  expansionGap: 0.8, optimizeStart: true, startFlip: false, wastePurchasePct: 10, seed: 12345,
-} as any;
 
 export function runSuite(full: boolean) {
   const cases: { name: string; room: Room; batches: PlankBatch[]; config: LayoutConfig }[] = [];
@@ -220,7 +278,7 @@ export function runSuite(full: boolean) {
 if (require.main === module) {
   const full = process.argv.includes('--full');
   const rows = runSuite(full);
-  const cols: (keyof Metrics)[] = ['rows', 'joints', 'viol1Pct', 'flush1', 'align2Pct', 'repeat2Pct', 'staircase', 'medGap', 'wastePct', 'cuts', 'underMinCut'];
+  const cols: (keyof Metrics)[] = ['rows', 'joints', 'viol1Pct', 'flush1', 'bandMax', 'samePlank', 'align2Pct', 'repeat2Pct', 'staircase', 'medGap', 'minPiece', 'minRip', 'wastePct', 'cuts', 'underMinCut'];
   const head = ['cas'.padEnd(28), ...cols.map((c) => String(c).padStart(10))].join(' ');
   console.log(head); console.log('-'.repeat(head.length));
   for (const r of rows) console.log([r.name.padEnd(28), ...cols.map((c) => String(r[c]).padStart(10))].join(' '));

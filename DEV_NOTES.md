@@ -221,6 +221,63 @@ tient** : le décalage demandé n'est pas toujours atteignable, l'utilisateur do
 
 Le `ConfigPanel` propose la valeur DTU en un clic quand le réglage la dépasse.
 
+### Refends inposables, provenance des lames, `prevDrift` unidirectionnel
+
+**`prevDrift` ne lisait qu'un côté** (`straight.ts`) alors que `near` lit les deux. Avec une
+ligne de départ, la passe `up()` remonte en y décroissant : sa voisine déjà tracée est de
+l'autre côté. `prevDrift` valait donc `Infinity` sur TOUTE la moitié `up()`, et les gardes
+`Number.isFinite(prevDrift)` y désarmaient silencieusement l'anti-escalier. Corrigé en
+lisant les deux voisines. Effet mesuré : escalier 3,4 → 1,7.
+
+**Filets de refend inposables.** Aucune largeur minimale n'existait : `isRipped` était
+seulement CONSTATÉ après clip. Le banc mesurait 0,2 cm de large sur les deux plans réels —
+une bande qui casse à la scie. Deux mécanismes :
+- `balanceEdges` décale la trame (au demi-millimètre, sur une période) pour que les DEUX
+  rives soient posables. Existait sans ligne de départ ; avec une ligne de départ, la trame
+  était ancrée telle quelle et la dernière rangée recevait ce qui restait.
+- `layout.ts` ÉCARTE du plan les lames dont la largeur visible reste sous `minRipWidth` :
+  elles tombent en rive, sous la plinthe et dans le jeu de dilatation. Les annoncer
+  reviendrait à demander de scier une bande de 2 mm. Comptées dans `stats.droppedSlivers`.
+
+**Provenance des lames.** `Inventory.request` servait les chutes en best-fit sans savoir
+d'où elles venaient : la chute de la rangée N est MÉCANIQUEMENT le meilleur ajustement pour
+la rangée N+1, donc les morceaux A et B d'une même lame finissaient systématiquement côte à
+côte (même veinage, même teinte). `takeExact` et `request` acceptent désormais un ensemble
+`avoid` de `plankNo`, alimenté par les rangées voisines.
+
+### Seuils — sources vérifiées
+
+| Contrainte | Valeur | Statut |
+|---|---|---|
+| Largeur mini rangée de rive | **5 cm** | Quick-Step, *Installation Guide* p. 4 : « the width of the first and last row should be at least 5 cm ». **Aucun NF DTU ne fixe cette valeur** — le « 5 cm du DTU » qui circule est une invention. |
+| Longueur mini pièce en bout | **20 cm** | Quick-Step p. 4 (« more than 20 cm ») + Pergo (8"). Aucun NF DTU. |
+| Décalage mini joints | **max(2 × largeur, 30 cm)** | 2 × largeur = **NF DTU 51.11 §5.2** (seul chiffre normatif FR) ; 30 cm = Quick-Step / Pergo. Deux règles distinctes, prendre le max. |
+| Équilibrage des rives | si reste < largeur mini, répartir sur les deux rives | EGGER : « cut the first row so both the first and last rows are of a similar width ». Le SEUIL exact n'est donné par aucune source — déduit. |
+
+### État mesuré — 120 simulations, banc identique des deux côtés
+
+| | avant | après |
+|---|---|---|
+| morceaux d'une même lame voisins | 2,2 | **0** |
+| refend le plus étroit | 8,5 cm (**0,2 cm** sur les plans réels) | **9,1 cm** (6,8 et 7,8 sur les réels) |
+| effet escalier | 3,4 | **1,7** |
+| joints en « H » | 7,0 % | **7,5 %** |
+| joints sous la cible | 5,2 % | 6,1 % |
+| chute perdue | 3,4 % | 4,5 % |
+| coupes | 68,5 | 97,1 |
+
+Le coût est réel et concentré sur `avoidSamePlank` : mesuré isolément, ce seul réglage vaut
++0,9 pt de joints fautifs, +1,1 pt de chute et +41 % de coupes. D'où le **réglage** dans
+l'UI plutôt qu'une règle en dur.
+
+### Ce que le banc ne reproduit PAS
+
+`bandMax` (plus longue série de rangées consécutives portant un joint au même endroit) reste
+à **1,2** avant comme après, sur 120 simulations et sur les deux plans réels. **La bande
+d'une dizaine de rangées observée en capture n'a jamais été reproduite.** Le correctif
+`prevDrift` est un vrai bug corrigé, mais rien ne prouve qu'il en était la cause. Piste
+restante : la capture pouvait précéder le déploiement. À revérifier sur un plan recalculé.
+
 ### Ce qui RESTE ouvert
 ### Règles de l'art — sources
 

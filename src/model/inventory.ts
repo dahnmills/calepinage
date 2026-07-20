@@ -145,10 +145,15 @@ export class Inventory {
    * Sort une lame d'une longueur EXACTE (chute d'abord). Sert au motif, qui choisit lui-même
    * la longueur qui place le mieux son joint, puis vient la réserver ici.
    */
-  takeExact(length: number, width: number): CutResult | null {
+  takeExact(length: number, width: number, avoid?: Set<number>): CutResult | null {
     if (this.reuse) {
+      // `avoid` = lames déjà posées dans la rangée voisine. Servir la chute d'une de ces
+      // lames met deux morceaux du MÊME bois côte à côte : même veinage, même teinte, ça
+      // se voit immédiatement. Les guidelines NWFA demandent l'inverse (« work from
+      // multiple bundles to ensure variation »).
       const i = this.offcuts.findIndex(
-        (o) => Math.abs(o.width - width) <= 0.5 && Math.abs(o.length - length) <= 1e-6,
+        (o) => Math.abs(o.width - width) <= 0.5 && Math.abs(o.length - length) <= 1e-6
+          && !avoid?.has(o.plankNo),
       );
       if (i !== -1) {
         const o = this.offcuts[i];
@@ -242,13 +247,18 @@ export class Inventory {
    * Demande une lame de longueur `length` et largeur `width`.
    * Stratégie : chute best-fit >= length -> sinon lame neuve (découpe si plus longue).
    */
-  request(length: number, width: number): CutResult {
+  request(length: number, width: number, avoid?: Set<number>): CutResult {
     // 1) Réutiliser une chute : la plus courte qui couvre le besoin (best-fit).
+    //    `avoid` écarte les chutes issues des lames de la rangée voisine — sans elle, la
+    //    chute qu'on vient de produire est MÉCANIQUEMENT le meilleur ajustement pour la
+    //    rangée suivante, et les morceaux A et B d'une même lame finissent toujours côte
+    //    à côte. Simple préférence : si rien d'autre ne convient, on entame une lame neuve.
     if (this.reuse) {
       let best = -1;
       for (let i = 0; i < this.offcuts.length; i++) {
         const o = this.offcuts[i];
         if (Math.abs(o.width - width) > 0.5) continue;
+        if (avoid?.has(o.plankNo)) continue;
         if (o.length + 1e-6 >= length) {
           if (best === -1 || o.length < this.offcuts[best].length) best = i;
         }

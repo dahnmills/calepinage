@@ -132,6 +132,8 @@ const defaultConfig: LayoutConfig = {
   offsetMode: '1/2',
   jointGap: 0,
   minCutLength: 20,
+  minRipWidth: 5, // Quick-Step : « first and last row at least 5 cm »
+  avoidSamePlank: true,
   minJointOffset: 30,
   reuseOffcuts: true,
   cutTolerance: 1,

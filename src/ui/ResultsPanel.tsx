@@ -30,10 +30,19 @@ export default function ResultsPanel() {
         </div>
       )}
 
+      {stats.droppedSlivers > 0 && (
+        <div className="note">
+          <b>{stats.droppedSlivers} filet(s) écarté(s)</b> — trop étroits pour être posés
+          (moins de {config.minRipWidth} cm de large après refend). Ils tombent en rive :
+          la plinthe et le jeu de dilatation les couvrent. Le plan ne les demande donc pas.
+        </div>
+      )}
+
       {stats.stagger.total > 0 && (
         <div className={stats.stagger.min < 6 ? 'alert' : 'note'}>
           <b>Décalage des joints obtenu</b> — minimum <b>{stats.stagger.min} cm</b>,
           médiane {stats.stagger.median} cm, sur {stats.stagger.total} joints.
+          {' '}Refend le plus étroit : <b>{stats.minRipWidth} cm</b>.
           {stats.stagger.below > 0 && (
             <>
               {' '}<b>{stats.stagger.below}</b> joint(s) sous les {stats.stagger.target} cm demandés.

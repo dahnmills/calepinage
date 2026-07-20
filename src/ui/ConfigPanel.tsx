@@ -111,7 +111,28 @@ export default function ConfigPanel() {
 
       <label className="field">
         <span>Longueur mini de coupe (cm)</span>
-        <NumberField min={0} step={0.5} value={config.minCutLength} onChange={(v) => setConfig({ minCutLength: v })} />
+        <NumberField
+          min={0} step={0.5} value={config.minCutLength} onChange={(v) => setConfig({ minCutLength: v })}
+          title="Longueur minimale d'un morceau en bout de rangée. Quick-Step et Pergo imposent 20 cm. Aucun NF DTU ne fixe de valeur."
+        />
+      </label>
+
+      <label className="field">
+        <span>Largeur mini de rive (cm)</span>
+        <NumberField
+          min={0} step={0.5} value={config.minRipWidth} onChange={(v) => setConfig({ minRipWidth: v })}
+          title="Largeur minimale d'une rangée de rive après refend. En deçà, la trame est décalée pour répartir le reste sur les deux rives, et les filets restants sont écartés du plan (ils disparaissent sous la plinthe). Quick-Step : « the width of the first and last row should be at least 5 cm ». Aucun NF DTU ne fixe cette valeur."
+        />
+      </label>
+
+      <label className="field checkbox">
+        <input
+          type="checkbox" checked={config.avoidSamePlank !== false}
+          onChange={(e) => setConfig({ avoidSamePlank: e.target.checked })}
+        />
+        <span title="Deux morceaux d'une même lame côte à côte, c'est le même veinage répété — les guidelines NWFA demandent de puiser dans plusieurs paquets. Mesuré sur 120 simulations : la chute passe de 3,4 % à 4,5 % et les coupes de 69 à 97.">
+          Éviter deux morceaux d'une même lame côte à côte
+        </span>
       </label>
 
       <label className="field checkbox">

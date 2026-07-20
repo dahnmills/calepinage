@@ -98,6 +98,12 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
    * parfait — techniquement conforme, visuellement inacceptable. C'est le piège classique.
    */
   const driftByRow = new Map<number, number>();
+  /**
+   * Lames physiques posées dans chaque rangée. Sert à ne pas servir à la rangée suivante
+   * une chute issue d'une lame déjà posée juste à côté : deux morceaux du même bois côte à
+   * côte, c'est le même veinage répété — proscrit par les guidelines NWFA.
+   */
+  const plankNosByRow = new Map<number, Set<number>>();
   const rowKey = (y: number) => Math.round(y * 10);
   const minOffset = Math.max(0, config.minJointOffset ?? 0);
   /** Marge anti joint en « H » entre rangées n et n+2 (NWFA). */
@@ -429,7 +435,20 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
     ];
     const joints: number[] = [];
     const drifts: number[] = [];
-    const prevDrift = driftByRow.get(rowKey(rowTop - rowStep)) ?? Infinity;
+    // La dérive se lit sur la voisine RÉELLEMENT tracée, des deux côtés — comme `near`.
+    // Elle n'était lue qu'en `rowTop - rowStep` : or avec une ligne de départ, la passe
+    // `up()` remonte en y décroissant, sa voisine déjà tracée est de l'autre côté.
+    // `prevDrift` valait donc `Infinity` sur TOUTE la moitié `up()`, et les gardes
+    // `Number.isFinite(prevDrift)` y désarmaient silencieusement l'anti-escalier : la
+    // moitié du plancher était calepinée sans aucune protection contre l'alignement.
+    const avoidPlanks = config.avoidSamePlank === false ? undefined : new Set<number>([
+      ...(plankNosByRow.get(rowKey(rowTop - rowStep)) ?? []),
+      ...(plankNosByRow.get(rowKey(rowTop + rowStep)) ?? []),
+    ]);
+    const rowPlanks = new Set<number>();
+    const prevDrift = driftByRow.get(rowKey(rowTop - rowStep))
+      ?? driftByRow.get(rowKey(rowTop + rowStep))
+      ?? Infinity;
 
     // Plages de matière CONTINUE de la rangée ENTIÈRE, calculées une fois.
     //
@@ -517,7 +536,9 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
       const want = Math.min(bestLens[li], avail);
       // La simulation a raisonné sur une copie fidèle des quantités : la lame exacte doit
       // exister. Sinon on retombe sur `request`, qui coupera dans une plus longue.
-      const cut = inventory.takeExact(want, poseWidth) ?? inventory.request(want, poseWidth);
+      const cut = inventory.takeExact(want, poseWidth, avoidPlanks)
+        ?? inventory.request(want, poseWidth, avoidPlanks);
+      rowPlanks.add(cut.plankNo);
 
       const placedLen = Math.min(avail, cut.provided);
       if (placedLen <= 1e-3) break;
@@ -574,6 +595,7 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
     }
 
     jointsByRow.set(rowKey(rowTop), joints);
+    plankNosByRow.set(rowKey(rowTop), rowPlanks);
     // Décalage dominant = médiane : une valeur isolée ne doit pas passer pour la tendance.
     if (drifts.length) {
       const sorted = drifts.slice().sort((a, b) => a - b);
@@ -581,11 +603,58 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
     }
   };
 
+  /**
+   * Largeur visible des deux rangées de RIVE pour une trame donnée.
+   * Une rive de 0,7 cm ne se pose pas : elle casse à la scie et ne tient pas. La notice
+   * Quick-Step exige « the width of the first and last row should be at least 5 cm ».
+   */
+  const edgeWidths = (origin: number): [number, number] => {
+    const kTop = Math.floor((bb.minY - origin) / rowStep);
+    const topY = origin + kTop * rowStep;
+    const kBot = Math.floor((bb.maxY - origin) / rowStep);
+    const botY = origin + kBot * rowStep;
+    const top = Math.min(topY + poseWidth, bb.maxY) - bb.minY;
+    const bot = bb.maxY - botY;
+    // Une seule rangée couvre toute la pièce : pas de rive à équilibrer.
+    if (kBot <= kTop) return [bb.maxY - bb.minY, bb.maxY - bb.minY];
+    return [Math.min(top, poseWidth), Math.min(bot, poseWidth)];
+  };
+
+  /**
+   * Décale la trame pour que les DEUX rives soient posables. C'est le geste du poseur :
+   * plutôt que de laisser un filet inposable contre un mur, on refend aussi la première
+   * rangée pour répartir le reste sur les deux côtés (EGGER : « cut the first row of
+   * boards so both the first and last rows are of a similar width »).
+   * On ne bouge que si nécessaire, et du minimum : la ligne de départ reste une référence
+   * que l'utilisateur a posée délibérément.
+   */
+  const balanceEdges = (origin: number): number => {
+    const minRip = Math.max(0, config.minRipWidth ?? 0);
+    if (minRip <= 0) return origin;
+    const [t0, b0] = edgeWidths(origin);
+    if (Math.min(t0, b0) >= minRip - 1e-6) return origin;
+    let best = origin;
+    let bestMin = Math.min(t0, b0);
+    // Balayage au demi-millimètre sur une période de trame : au-delà, on retombe sur la
+    // même configuration.
+    for (let d = 0; d < rowStep; d += 0.05) {
+      const [t, b] = edgeWidths(origin + d);
+      const m = Math.min(t, b);
+      if (m > bestMin + 1e-6) { bestMin = m; best = origin + d; }
+      if (bestMin >= poseWidth / 2) break; // rives équilibrées : rien de mieux à espérer
+    }
+    return best;
+  };
+
   if (startLineY != null) {
     // Ligne de départ : rangées des deux côtés. L'ordre = ordre de pose (numérotation
     // radiale). `startFlip` choisit par quel côté on commence.
-    const down = () => { for (let y = startLineY; y < bb.maxY; y += rowStep) planRow(y); };
-    const up = () => { for (let y = startLineY - rowStep; y + poseWidth > bb.minY; y -= rowStep) planRow(y); };
+    // La trame était ancrée telle quelle sur la ligne de départ : la dernière rangée
+    // recevait ce qui restait, fût-ce 2 mm. On l'équilibre si — et seulement si — une rive
+    // tomberait sous la largeur minimale posable.
+    const base = optimizeStart ? balanceEdges(startLineY) : startLineY;
+    const down = () => { for (let y = base; y < bb.maxY; y += rowStep) planRow(y); };
+    const up = () => { for (let y = base - rowStep; y + poseWidth > bb.minY; y -= rowStep) planRow(y); };
     if (config.startFlip) { up(); down(); } else { down(); up(); }
   } else {
     // Rive équilibrée (haut/bas de largeur égale).
@@ -595,6 +664,7 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
       const nFull = Math.floor(span / rowStep);
       const rem = span - nFull * rowStep;
       if (rem > 1e-3 && nFull >= 1) startY = bb.minY - (rowStep - (rowStep + rem) / 2);
+      startY = balanceEdges(startY); // filet de sécurité : jamais de rive inposable
     }
     for (let y = startY; y < bb.maxY; y += rowStep) planRow(y);
   }
