@@ -67,6 +67,13 @@ Helper `dedupePoints` (`src/model/geometry.ts`), appliqué :
   la valeur lue ne correspondait pas à celle enregistrée (173,6 à l'écran → 173,5 posé).
   Aperçu, valeur affichée et clic passent maintenant tous par **`measurePoint()`**, avec
   la même entrée arrondie au dixième (`tenth()`). Ne jamais court-circuiter ce chemin.
+- **Viser à la souris est borné par le pixel** : le pas minimal vaut `1 / view.scale` cm.
+  Dézoomé (~1 px/cm), les valeurs au dixième sont inatteignables quel que soit le soin.
+  D'où la **saisie clavier de la cote** (`measureLen`) : taper une longueur + Entrée pose
+  le 2ᵉ point à la distance exacte, dans la direction visée. C'est la seule voie fiable.
+- Les raccourcis de zoom **restent actifs pendant un tracé ou une mesure** — c'est là qu'on
+  a besoin de viser fin. Seul `0` (ajuster la vue) est neutralisé pendant une saisie
+  chiffrée, car il collerait au « 0 » de « 40 ».
 - **Alt maintenu = aucun aimant** (état `freeSnap`), pour la mesure comme pour le tracé :
   le point se pose pile sous le curseur, sans recalage de cote. Suivi au `mousemove`
   (`e.altKey`) + `keydown`/`keyup` + `blur` (sinon l'aimant reste coupé après un

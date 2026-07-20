@@ -93,6 +93,12 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
   const [axisLock, setAxisLock] = useState(false);
   /** Alt maintenu : plus aucun aimant, le point se pose pile sous le curseur. */
   const [freeSnap, setFreeSnap] = useState(false);
+  /**
+   * Longueur de cote tapée au clavier. Viser au pixel ne permet pas mieux que ~1/zoom cm :
+   * dézoomé, les valeurs intermédiaires restent inatteignables quoi qu'on fasse. La saisie
+   * donne la cote exacte, indépendamment du zoom.
+   */
+  const [measureLen, setMeasureLen] = useState('');
   const [pickedPlank, setPickedPlank] = useState<
     {
       label: string; length: number; nominalLength: number; width: number;
@@ -800,6 +806,7 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
       }
       if (measureStart) snapshot();
       const q = measurePoint(w);
+      setMeasureLen('');
       if (measureStart) finishMeasure(q); else startMeasure(q);
       return;
     }
@@ -929,12 +936,13 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
       }
       if (e.key === 'Alt') { setFreeSnap(true); return; }
       if (e.code === 'Space') { spaceDown.current = true; return; }
-      // Les raccourcis de zoom (+ - 0) sont désactivés quand on saisit une longueur au
-      // clavier : sinon taper « 40 » déclenche « 0 » = ajuster la vue, et la vue saute.
-      if (isDrawing || tool === 'startline' || tool === 'measure') return;
+      // Zoomer doit rester possible EN COURS de tracé ou de mesure : c'est justement là
+      // qu'on a besoin de viser fin. Seul « 0 » (ajuster la vue) entre en conflit avec une
+      // saisie chiffrée — on ne neutralise que lui, et seulement pendant la saisie.
+      const typing = isDrawing || tool === 'startline' || tool === 'measure';
       if (e.key === '+' || e.key === '=') { const c = center(); zoomAt(c.x, c.y, 1.2); }
       else if (e.key === '-' || e.key === '_') { const c = center(); zoomAt(c.x, c.y, 1 / 1.2); }
-      else if (e.key === '0') fit();
+      else if (e.key === '0' && !typing) fit();
     };
     const up = (e: KeyboardEvent) => {
       if (e.key === 'Alt') setFreeSnap(false);
@@ -957,9 +965,37 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
     const onKey = (e: KeyboardEvent) => {
       // Ne pas interférer avec la saisie d'une cote existante (mode édition).
       if (document.activeElement instanceof HTMLInputElement) return;
-      if (tool === 'measure' && e.key === 'Escape') {
-        if (measureStart) cancelMeasure(); else setTool('edit');
-        return;
+      if (tool === 'measure') {
+        if (e.key === 'Escape') {
+          if (measureLen) { setMeasureLen(''); return; }
+          if (measureStart) cancelMeasure(); else setTool('edit');
+          return;
+        }
+        // Cote tapée : le 2ᵉ point se pose à la distance EXACTE demandée, dans la direction
+        // visée par le curseur. Seule façon d'obtenir 173,6 quand le pixel vaut 1 cm.
+        if (measureStart) {
+          if (/^[0-9.,]$/.test(e.key)) {
+            e.preventDefault();
+            setMeasureLen((s) => s + (e.key === ',' ? '.' : e.key));
+            return;
+          }
+          if (e.key === 'Backspace') { e.preventDefault(); setMeasureLen((s) => s.slice(0, -1)); return; }
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            const len = parseFloat(measureLen);
+            const p = measurePoint(rawWorld.current);
+            const d = dist(measureStart, p);
+            if (Number.isFinite(len) && len > 0 && d > 1e-6) {
+              snapshot();
+              finishMeasure(tenth({
+                x: measureStart.x + ((p.x - measureStart.x) / d) * len,
+                y: measureStart.y + ((p.y - measureStart.y) / d) * len,
+              }));
+            }
+            setMeasureLen('');
+            return;
+          }
+        }
       }
       if (tool === 'startline') {
         if (e.key === 'Tab' || e.key === ' ') {
@@ -1028,7 +1064,7 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [tool, isDrawing, drawing.length, selectedVertex, selectedEl, measureStart, cancelMeasure, undoDrawPoint, clearRoom, setTool, setConfig, closeRoom, closeHole, closePartition, deleteVertex, removePartition, removeDoor, commitDrawFromInput, commitStartLine, wallAlong, commitWallFace]);
+  }, [tool, isDrawing, drawing.length, selectedVertex, selectedEl, measureStart, cancelMeasure, undoDrawPoint, clearRoom, setTool, setConfig, closeRoom, closeHole, closePartition, deleteVertex, removePartition, removeDoor, commitDrawFromInput, commitStartLine, wallAlong, commitWallFace, measureLen, measurePoint, finishMeasure, snapshot]);
 
   const commitLenEdit = () => {
     if (!lenEdit) return;
@@ -1106,7 +1142,11 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
             const droit = Math.abs(ang) < 0.05 || Math.abs(Math.abs(ang) - 90) < 0.05;
             return (
               <>
-                <span className="hud-field">L <b>{(Math.round(d * 10) / 10).toFixed(1)}</b> cm</span>
+                <span className="hud-field">
+                  L <b className={measureLen ? 'typed' : ''}>
+                    {measureLen || (Math.round(d * 10) / 10).toFixed(1)}
+                  </b> cm
+                </span>
                 <span className="hud-field">
                   ∠ <b className={droit ? 'ok' : ''}>{ang.toFixed(1)}</b>°
                   {droit && <span className="hud-ok"> droit</span>}
@@ -1117,8 +1157,9 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
             <span className="hud-field">Cliquez le 1ᵉʳ point</span>
           )}
           <span className="hud-hint">
-            <b className={axisLock ? 'typed' : ''}>Maj</b> = cote bien droite (0°/90°) ·{' '}
-            <b className={freeSnap ? 'typed' : ''}>Alt</b> = sans aimant · Échap annule
+            tapez une longueur + Entrée · <b className={axisLock ? 'typed' : ''}>Maj</b> = cote
+            bien droite (0°/90°) · <b className={freeSnap ? 'typed' : ''}>Alt</b> = sans aimant ·
+            <b>+</b>/<b>−</b> = zoom · Échap annule
           </span>
         </div>
       )}
