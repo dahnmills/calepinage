@@ -50,6 +50,25 @@ Helper `dedupePoints` (`src/model/geometry.ts`), appliqué :
 
 ---
 
+## Cotes automatiques (orange, face à face)
+
+- Affichées **aussi après le calepinage**. Elles étaient masquées par un `!result` : or
+  c'est justement une fois les lames posées qu'on relit le plan et qu'on vérifie ses
+  écarts. Seule la case « Cotes des cloisons » (`showGaps`) les régit.
+- **Corrigeables au chiffre.** Cliquer une cote orange (outil Édition) ouvre une saisie :
+  la cloison mesurée se translate le long du rayon de la cote jusqu'à ce que l'écart net
+  vaille exactement la valeur tapée. Le rayon va de la face vers l'obstacle, donc avancer
+  de `dist − cible` referme l'écart d'autant (`commitGapEdit` → `moveWholePartition`).
+  Toute la cloison bouge, un L garde sa forme. C'est la seule façon d'obtenir 117 pile :
+  au glissement souris, le pas minimal vaut `1 / view.scale` cm.
+- `drawPartitionGaps` remplit `gapLabels` (position écran, écart, cloison, direction) —
+  même mécanique que `edgeLabels` pour les cotes de murs.
+- La cloison de synthèse qui donne les cotes vives AVANT le 2ᵉ point s'appuie sur
+  `perpToNearestSupport` : périmètre **et** faces de cloisons. Limité au périmètre, partir
+  d'une cloison ne produisait aucune cote vive.
+
+---
+
 ## Aimants (accroche) — règles
 
 - Les guides d'accroche du tracé ET de la mesure sont les **faces** des cloisons

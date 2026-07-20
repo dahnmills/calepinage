@@ -210,6 +210,10 @@ button.primary:hover { background: #1d4ed8; }
 }
 .len-edit input { width: 56px; border: none; padding: 2px; font-size: 13px; text-align: right; }
 .len-edit input:focus { outline: none; }
+/* Cote automatique : même orange que la cote dessinée, pour qu'on voie ce qu'on corrige. */
+.gap-edit { border-color: rgba(180,83,9,0.85); background: #fff7ed; }
+.gap-edit input { background: transparent; color: #9a3412; font-weight: 600; }
+.gap-edit span { color: #9a3412; }
 
 .muted { color: var(--muted); font-size: 13px; }
 .cut-list { max-height: 200px; overflow-y: auto; font-size: 12px; }

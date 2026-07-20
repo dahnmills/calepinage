@@ -17,6 +17,13 @@ import type { Point, Door as DoorT, Partition, Room } from '../model/types';
 interface DrawPreview extends SnapResult { hasLast: boolean }
 interface EdgeLabel { edgeIndex: number; sx: number; sy: number; length: number }
 interface LenEdit { edgeIndex: number; value: string; sx: number; sy: number }
+/**
+ * Étiquette d'une cote automatique (écart net face à face), avec de quoi la CORRIGER :
+ * la cloison mesurée et la direction du rayon. Saisir 117 sur une cote de 116,6 déplace
+ * la cloison de 0,4 cm dans cette direction — infaisable au pixel près à la souris.
+ */
+interface GapLabel { sx: number; sy: number; dist: number; partIndex: number; dir: Point }
+interface GapEdit { partIndex: number; dist: number; dir: Point; value: string; sx: number; sy: number }
 /** Position de la ligne le long du mur auquel elle est aimantée (cotes du plan). */
 interface StartWall {
   index: number;
@@ -83,6 +90,7 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
   const [preview, setPreview] = useState<DrawPreview | null>(null);
   const [override, setOverride] = useState<{ len: string; ang: string }>({ len: '', ang: '' });
   const [lenEdit, setLenEdit] = useState<LenEdit | null>(null);
+  const [gapEdit, setGapEdit] = useState<GapEdit | null>(null);
   const [hoverVertex, setHoverVertex] = useState<number>(-1);
   const [cursorCm, setCursorCm] = useState<Point | null>(null);
   /** Distance tapée au clavier pour poser la ligne de départ à une cote exacte sur le mur. */
@@ -154,6 +162,7 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
   const [selectedEl, setSelectedEl] = useState<{ type: 'partition' | 'door'; index: number; seg?: number } | null>(null);
   const rawWorld = useRef<Point>({ x: 0, y: 0 });
   const edgeLabels = useRef<EdgeLabel[]>([]);
+  const gapLabels = useRef<GapLabel[]>([]);
   const fittedRef = useRef(false);
 
   const vThreshPx = 12;
@@ -400,8 +409,11 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
       ctx.restore();
     }
     // Cotes automatiques : distance nette (face à face) de chaque cloison à son voisin.
-    if (showGaps && room.partitions?.length && !result) {
-      drawPartitionGaps(ctx, room, view);
+    // Elles restent affichées APRÈS le calepinage : c'est justement le moment où on relit
+    // le plan et où on vérifie ses écarts. La case « Cotes des cloisons » les régit seule.
+    gapLabels.current = [];
+    if (showGaps && room.partitions?.length) {
+      drawPartitionGaps(ctx, room, view, undefined, gapLabels.current);
     }
     // Portes / ouvertures (murs du périmètre et cloisons).
     for (const d of room.doors ?? []) {
@@ -453,7 +465,7 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
         // on place le 1ᵉʳ point sur un chiffre d'axe, décalé de la demi-épaisseur.
         if (chain.length < 2 && preview) {
           const p = chain[0] ?? preview.point;
-          const perp = perpToNearestEdge(room.points, p);
+          const perp = perpToNearestSupport(room, p);
           if (perp) chain = [p, { x: p.x + perp.x * 120, y: p.y + perp.y * 120 }];
         }
         if (chain.length >= 2 && (preview || drawing.length > 0)) {
@@ -819,11 +831,26 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
       // Clic sur une cote -> édition numérique.
       const rect = canvasRef.current!.getBoundingClientRect();
       const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+      // Cote AUTO (orange) d'abord : c'est la plus fine et la plus nombreuse, et la
+      // corriger au chiffre est le seul moyen fiable de caler une cloison au dixième.
+      let gap: GapLabel | null = null;
+      for (const l of gapLabels.current) {
+        if (Math.hypot(l.sx - sx, l.sy - sy) < 16) { gap = l; break; }
+      }
+      if (gap) {
+        setLenEdit(null);
+        setGapEdit({
+          partIndex: gap.partIndex, dist: gap.dist, dir: gap.dir,
+          value: String(Math.round(gap.dist * 10) / 10), sx: gap.sx, sy: gap.sy,
+        });
+        return;
+      }
       let hit: EdgeLabel | null = null;
       for (const l of edgeLabels.current) {
         if (Math.hypot(l.sx - sx, l.sy - sy) < 18) { hit = l; break; }
       }
       if (hit) {
+        setGapEdit(null);
         setLenEdit({ edgeIndex: hit.edgeIndex, value: String(Math.round(hit.length)), sx: hit.sx, sy: hit.sy });
         return;
       }
@@ -1073,6 +1100,23 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
     setLenEdit(null);
   };
 
+  /**
+   * Corrige une cote automatique au chiffre : la cloison mesurée se translate le long du
+   * rayon de la cote jusqu'à ce que l'écart net vaille exactement la valeur saisie.
+   * Le rayon part de la face vers l'obstacle, donc avancer de `dist - cible` referme
+   * l'écart d'autant. Toute la cloison bouge (un L garde sa forme).
+   */
+  const commitGapEdit = () => {
+    if (!gapEdit) return;
+    const v = parseFloat(gapEdit.value);
+    if (Number.isFinite(v) && v >= 0 && Math.abs(v - gapEdit.dist) > 1e-6) {
+      const m = gapEdit.dist - v;
+      snapshot();
+      moveWholePartition(gapEdit.partIndex, gapEdit.dir.x * m, gapEdit.dir.y * m);
+    }
+    setGapEdit(null);
+  };
+
   const onStartHandle =
     tool === 'edit' && config.startLine != null && cursorCm != null
     && dist(config.startLine, cursorCm) <= vThresh() * 1.5;
@@ -1199,6 +1243,23 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
               if (e.key === 'Escape') setLenEdit(null);
             }}
             onBlur={commitLenEdit}
+          />
+          <span>cm</span>
+        </div>
+      )}
+
+      {/* Correction d'une cote automatique : la cloison se recale sur la valeur saisie. */}
+      {gapEdit && (
+        <div className="len-edit gap-edit" style={{ left: gapEdit.sx - 40, top: gapEdit.sy - 14 }}>
+          <input
+            autoFocus
+            value={gapEdit.value}
+            onChange={(e) => setGapEdit({ ...gapEdit, value: e.target.value.replace(',', '.').replace(/[^0-9.]/g, '') })}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') commitGapEdit();
+              if (e.key === 'Escape') setGapEdit(null);
+            }}
+            onBlur={commitGapEdit}
           />
           <span>cm</span>
         </div>
@@ -1604,6 +1665,23 @@ function perpToNearestEdge(poly: Point[], p: Point): Point | null {
     best = { d: pr.d, nx, ny };
   }
   return best ? { x: best.nx, y: best.ny } : null;
+}
+
+/**
+ * Perpendiculaire sortante de l'appui sous le point : mur du périmètre OU face de cloison.
+ * On démarre une cloison aussi bien contre une cloison existante que contre un mur ; s'en
+ * tenir au périmètre laissait ce cas sans cloison de synthèse, donc sans cote vive.
+ */
+function perpToNearestSupport(room: Room, p: Point): Point | null {
+  const wall = perpToNearestEdge(room.points, p);
+  if (wall) return wall;
+  for (const rect of partitionRects(room.partitions ?? [])) {
+    const n = perpToNearestEdge(rect, p);
+    // `perpToNearestEdge` rentre dans le polygone ; ici il faut EN SORTIR (s'éloigner
+    // de la cloison d'appui), d'où l'inversion.
+    if (n) return { x: -n.x, y: -n.y };
+  }
+  return null;
 }
 
 /** Distance d'un point (posé sur le périmètre) au coin de départ de son mur. */
@@ -2044,7 +2122,9 @@ function rayHitSeg(o: Point, d: Point, a: Point, b: Point): number {
  * cloison) et on affiche la distance NETTE, face à face, épaisseurs déduites. On suit ainsi
  * en direct l'écart d'une cloison à l'autre, et il se met à jour quand on la déplace.
  */
-function drawPartitionGaps(ctx: CanvasRenderingContext2D, room: Room, v: View, onlyId?: string) {
+function drawPartitionGaps(
+  ctx: CanvasRenderingContext2D, room: Room, v: View, onlyId?: string, out?: GapLabel[],
+) {
   // Obstacles : faces intérieures du périmètre + faces de toutes les cloisons.
   const obstacles: [Point, Point][] = [];
   const n = room.points.length;
@@ -2060,8 +2140,9 @@ function drawPartitionGaps(ctx: CanvasRenderingContext2D, room: Room, v: View, o
 
   // On collecte d'abord toutes les cotes, puis on dédoublonne : l'écart entre deux cloisons
   // est mesuré des deux côtés (chacune vers l'autre) et donnerait deux fois la même cote.
-  const gaps: { o: Point; hit: Point; ux: number; uy: number; dist: number }[] = [];
-  for (const wall of room.partitions) {
+  const gaps: { o: Point; hit: Point; ux: number; uy: number; dist: number; pi: number; dir: Point }[] = [];
+  for (let pi = 0; pi < room.partitions.length; pi++) {
+    const wall = room.partitions[pi];
     // Pendant le tracé : on ne mesure QUE depuis la cloison en cours (les autres ont déjà
     // leurs cotes affichées par ailleurs).
     if (onlyId && wall.id !== onlyId) continue;
@@ -2094,7 +2175,10 @@ function drawPartitionGaps(ctx: CanvasRenderingContext2D, room: Room, v: View, o
           if (t < best) best = t;
         }
         if (!Number.isFinite(best) || best < 1 || best > 2000) continue;
-        gaps.push({ o: face, hit: { x: face.x + dir.x * best, y: face.y + dir.y * best }, ux, uy, dist: best });
+        gaps.push({
+          o: face, hit: { x: face.x + dir.x * best, y: face.y + dir.y * best },
+          ux, uy, dist: best, pi, dir,
+        });
       }
     }
   }
@@ -2136,6 +2220,7 @@ function drawPartitionGaps(ctx: CanvasRenderingContext2D, room: Room, v: View, o
         ctx.fill(); ctx.stroke();
         ctx.fillStyle = '#9a3412';
         ctx.fillText(txt, mx, my + 0.5);
+        out?.push({ sx: mx, sy: my, dist: g.dist, partIndex: g.pi, dir: g.dir });
   }
   ctx.restore();
 }
