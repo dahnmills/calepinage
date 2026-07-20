@@ -245,6 +245,30 @@ la rangée N+1, donc les morceaux A et B d'une même lame finissaient systémati
 côte (même veinage, même teinte). `takeExact` et `request` acceptent désormais un ensemble
 `avoid` de `plankNo`, alimenté par les rangées voisines.
 
+### Rives : jamais de vide, jamais de filet inposable
+
+Deux garde-fous distincts, tous deux issus d'écarts signalés en capture.
+
+**`solveEdges` recale la trame pour qu'aucune rive ne tombe dans la ZONE MORTE.** Une rive
+est acceptable si elle disparaît dans le jeu de dilatation (≤ `expansionGap`, la lame va
+jusqu'au mur) OU si elle est assez large pour être sciée (≥ `minRipWidth`). Entre les deux :
+trop grande pour être cachée (vide visible — le « 1,7 cm inacceptable »), trop petite pour
+une coupe propre. `solveEdges` cherche le PLUS PETIT décalage qui sort les deux rives de
+cette zone. C'est de la FAISABILITÉ, donc appliqué même sans `optimizeStart` — un vide n'est
+pas une préférence. Avant, l'équilibrage était conditionné à `optimizeStart` (que
+l'utilisateur avait désactivé), la trame restait ancrée sur la ligne de départ et la rive
+opposée tombait à 0,8 cm.
+
+**`sliverMax = gap + 0.1`** (`layout.ts`) : on n'écarte du plan QUE ce qui tient dans le jeu
+de dilatation. Un `Math.max(gap, 1)` avait été essayé — il écartait une rive de 0,8 cm quand
+le jeu n'en faisait que 0,75, laissant un vide sur une pièce en L (deux niveaux de mur haut
+à distance non multiple de la trame : `solveEdges` global ne peut pas régler les deux à la
+fois). Règle absolue : au-dessus du jeu, la lame est POSÉE, fût-elle fine (comptée dans
+`narrowRips`). Un filet fin est laid ; un vide est un plan faux.
+
+État sur les trois plans réels : zéro trou, refend le plus étroit 6,8 à 7,8 cm, aucune
+rangée fine résiduelle, aucun morceau sous `minCut`.
+
 ### Un calepinage ne doit JAMAIS laisser un trou — règle absolue
 
 Trois manières d'y arriver ont été commises puis corrigées. À ne pas refaire.

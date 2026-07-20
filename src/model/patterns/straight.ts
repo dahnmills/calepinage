@@ -655,39 +655,53 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
     return [Math.min(top, poseWidth), Math.min(bot, poseWidth)];
   };
 
+  const gapY = Math.max(0, config.expansionGap ?? 0);
+  // Une rive est ACCEPTABLE si elle disparaît dans le jeu de dilatation (≤ gap, la lame
+  // voisine va jusqu'au mur) OU si elle est assez large pour être posée (≥ minRipWidth).
+  // Entre les deux, c'est la zone morte : trop grande pour être cachée (vide visible contre
+  // le mur — le « 1,7 cm inacceptable »), trop petite pour être sciée proprement.
+  const edgeOk = (w: number) => w <= gapY + 1e-6 || w >= (config.minRipWidth ?? 0) - 1e-6;
+
   /**
-   * Décale la trame pour que les DEUX rives soient posables. C'est le geste du poseur :
-   * plutôt que de laisser un filet inposable contre un mur, on refend aussi la première
-   * rangée pour répartir le reste sur les deux côtés (EGGER : « cut the first row of
-   * boards so both the first and last rows are of a similar width »).
-   * On ne bouge que si nécessaire, et du minimum : la ligne de départ reste une référence
-   * que l'utilisateur a posée délibérément.
+   * Décale la trame pour qu'AUCUNE rive ne tombe dans la zone morte. C'est le geste du
+   * poseur : plutôt qu'un filet inposable contre un mur, on refend la rangée de rive pour
+   * qu'elle ait une largeur franche (EGGER : « cut the first row so both the first and last
+   * rows are of a similar width »).
+   *
+   * Faisabilité, pas esthétique : appliqué même sans `optimizeStart`, car un vide contre le
+   * mur n'est jamais acceptable. On prend le PLUS PETIT décalage qui règle les deux rives —
+   * la ligne de départ, posée délibérément par l'utilisateur, ne bouge que du strict
+   * nécessaire. À décalage égal, `optimizeStart` préfère en plus des rives équilibrées.
    */
-  const balanceEdges = (origin: number): number => {
-    const minRip = Math.max(0, config.minRipWidth ?? 0);
-    if (minRip <= 0) return origin;
+  const solveEdges = (origin: number): number => {
+    if ((config.minRipWidth ?? 0) <= 0) return origin;
     const [t0, b0] = edgeWidths(origin);
-    if (Math.min(t0, b0) >= minRip - 1e-6) return origin;
-    let best = origin;
-    let bestMin = Math.min(t0, b0);
-    // Balayage au demi-millimètre sur une période de trame : au-delà, on retombe sur la
-    // même configuration.
-    for (let d = 0; d < rowStep; d += 0.05) {
-      const [t, b] = edgeWidths(origin + d);
-      const m = Math.min(t, b);
-      if (m > bestMin + 1e-6) { bestMin = m; best = origin + d; }
-      if (bestMin >= poseWidth / 2) break; // rives équilibrées : rien de mieux à espérer
+    if (edgeOk(t0) && edgeOk(b0)) return origin; // déjà bon : on ne touche à rien
+    let best: number | null = null;
+    let bestScore = -Infinity;
+    // Décalages par |d| croissant : le premier qui règle les deux rives gagne (sauf
+    // `optimizeStart`, qui continue à |d| égal pour équilibrer).
+    for (let step = 0; step <= rowStep + 1e-6; step += 0.1) {
+      for (const d of step === 0 ? [0] : [step, -step]) {
+        const [t, b] = edgeWidths(origin + d);
+        if (!edgeOk(t) || !edgeOk(b)) continue;
+        // Moins on décale, mieux c'est ; à décalage égal et si optimizeStart, rives égales.
+        const score = -Math.abs(d) * 10 + (optimizeStart ? Math.min(t, b) : 0);
+        if (score > bestScore) { bestScore = score; best = origin + d; }
+      }
+      // Sans optimizeStart, le premier |d| qui marche suffit : inutile d'aller plus loin.
+      if (best != null && !optimizeStart) break;
     }
-    return best;
+    return best ?? origin;
   };
 
   if (startLineY != null) {
     // Ligne de départ : rangées des deux côtés. L'ordre = ordre de pose (numérotation
     // radiale). `startFlip` choisit par quel côté on commence.
     // La trame était ancrée telle quelle sur la ligne de départ : la dernière rangée
-    // recevait ce qui restait, fût-ce 2 mm. On l'équilibre si — et seulement si — une rive
-    // tomberait sous la largeur minimale posable.
-    const base = optimizeStart ? balanceEdges(startLineY) : startLineY;
+    // recevait ce qui restait, fût-ce un filet inposable écarté ensuite → vide contre le
+    // mur. On la recale pour qu'aucune rive ne tombe dans la zone morte.
+    const base = solveEdges(startLineY);
     const down = () => { for (let y = base; y < bb.maxY; y += rowStep) planRow(y); };
     const up = () => { for (let y = base - rowStep; y + poseWidth > bb.minY; y -= rowStep) planRow(y); };
     if (config.startFlip) { up(); down(); } else { down(); up(); }
@@ -699,8 +713,8 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
       const nFull = Math.floor(span / rowStep);
       const rem = span - nFull * rowStep;
       if (rem > 1e-3 && nFull >= 1) startY = bb.minY - (rowStep - (rowStep + rem) / 2);
-      startY = balanceEdges(startY); // filet de sécurité : jamais de rive inposable
     }
+    startY = solveEdges(startY); // filet de sécurité : jamais de rive dans la zone morte
     for (let y = startY; y < bb.maxY; y += rowStep) planRow(y);
   }
 

@@ -196,7 +196,12 @@ export function computeLayout(room: Room, batches: PlankBatch[], config: LayoutC
   // (Erreur commise puis corrigée : un filet de 2,7 cm avait été supprimé, laissant un
   // écart visible le long du mur.)
   const minRip = Math.max(0, config.minRipWidth ?? 0);
-  const sliverMax = Math.max(gap, 1); // jeu périphérique : au-delà, ça se voit
+  // On n'écarte QUE ce qui tient dans le jeu de dilatation, plus une marge d'un millimètre
+  // pour le bruit numérique. Au-delà, la lame reste POSÉE (fût-elle fine) : un `Math.max(gap,
+  // 1)` avait été essayé — il écartait une rive de 0,8 cm quand le jeu n'en faisait que 0,75,
+  // laissant un vide visible contre le mur d'une pièce en L. Un filet fin est laid ; un vide
+  // est un plan faux.
+  const sliverMax = gap + 0.1;
   const widthOf = (pl: (typeof placedCentered)[number]) => {
     const len = Math.min(pl.length, usedLengthOf(pl));
     if (len <= 1e-3) return 0;
