@@ -67,7 +67,6 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
   if (allPts.length === 0) return [];
   const bb = polygonBBox(allPts);
 
-  const rand = mulberry32(seed);
   const rowStep = poseWidth + jointGap;
   const planks: PlacedPlank[] = [];
   let idCounter = 0;
@@ -103,6 +102,10 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
   const minOffset = Math.max(0, config.minJointOffset ?? 0);
   /** Marge anti joint en « H » entre rangées n et n+2 (NWFA). */
   const H_JOINT_MIN = 10;
+  /** Découpages tirés au sort par plage avant d'en retenir un. Réglé au banc de mesure. */
+  const RUN_ATTEMPTS = 12;
+  /** Écart de note en deçà duquel deux longueurs sont jugées équivalentes (exploration). */
+  const EXPLORE_MARGIN = 30;
 
   /** Écart SIGNÉ au joint voisin le plus proche : le signe porte le sens de l'escalier. */
   const signedGapTo = (x: number, l: number, joints: number[]): number => {
@@ -139,10 +142,13 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
    */
   const chooseLength = (
     x: number, room: number, avail: number, near: number[], far: number[], prevDrift: number,
+    live: number[], draw: () => number,
   ): number => {
+    // `live` = longueurs disponibles dans la SIMULATION en cours, pas dans le stock réel :
+    // une plage se planifie entièrement avant d'être posée, sinon on ne peut pas la noter.
     // Une lame ne peut pas dépasser la place restante ; et si elle laisse un reste plus
     // court que la coupe minimale, ce reste serait inposable — on l'écarte.
-    const stock = inventory.availableLengths(poseWidth).filter((l) => {
+    const stock = live.filter((l) => {
       if (l < minCut || l > room + tol) return false;
       const rest = avail - l;
       return rest <= tol || rest >= minCut;
@@ -173,7 +179,7 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
         && Math.abs(drift - prevDrift) < 4 && Math.abs(drift) > 5 ? -120 : 0;
       // Un soupçon d'aléa (déterministe : même graine, même plan) départage les longueurs
       // équivalentes. Sans lui, les mêmes choix reviennent et le calepinage se met à rimer.
-      return fault + stair + steps + l * 0.05 + rand() * 4;
+      return fault + stair + steps + l * 0.05 + draw() * 4;
     };
 
     /**
@@ -196,12 +202,15 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
       });
     };
 
-    let best = stock[0], bestScore = -Infinity;
-    for (const l of stock) {
-      const sc = score(l) + (leavesAWay(l) ? 0 : -500);
-      if (sc > bestScore) { bestScore = sc; best = l; }
-    }
-    return best;
+    // On ne prend PAS systématiquement le meilleur : on tire au sort parmi les choix
+    // quasi équivalents. Sans cette exploration, les essais successifs d'une même plage
+    // redonnent tous le même découpage et la recherche locale ne cherche rien. La marge
+    // reste bien inférieure à la pénalité de faute (−1000) : un choix fautif ne peut pas
+    // entrer dans le tirage.
+    const scored = stock.map((l) => ({ l, sc: score(l) + (leavesAWay(l) ? 0 : -500) }));
+    const top = Math.max(...scored.map((c) => c.sc));
+    const pool = scored.filter((c) => c.sc >= top - EXPLORE_MARGIN);
+    return pool[Math.min(pool.length - 1, Math.floor(draw() * pool.length))].l;
   };
 
   /**
@@ -251,6 +260,92 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
     return nearOnly[0] ?? len;
   };
 
+  /**
+   * Découpage d'une plage entière, SIMULÉ sur une copie du stock.
+   *
+   * Le glouton décide lame par lame et ne revient jamais en arrière : sur une plage courte
+   * — un couloir de 250 cm entre deux cloisons — le premier choix condamne la suite, et la
+   * plage finit avec des joints collés à ceux de la rangée voisine. C'est là que se
+   * concentraient les fautes restantes (55 % sur les plages de ~250 cm).
+   *
+   * On tire donc plusieurs découpages au sort, on NOTE la plage entière, et on garde la
+   * meilleure : une recherche locale, comme le poseur qui présente sa rangée à sec avant
+   * de clouer (le « racking » des guidelines NWFA). Rien n'est consommé ici — la simulation
+   * travaille sur une copie des quantités, sinon elle réutiliserait dix fois la dernière
+   * lame de 160.
+   */
+  const planRun = (
+    runStart: number, runEnd: number, near: number[], far: number[], prevDrift: number,
+    draw: () => number,
+  ): number[] => {
+    const { counts } = inventory.availableCounts(poseWidth);
+    const stockLens = [...counts.keys()].sort((a, b) => b - a);
+    const take = (l: number): void => {
+      const n = counts.get(l) ?? 0;
+      if (n > 0) { counts.set(l, n - 1); return; }
+      // Pas cette cote en stock : on entame la plus courte lame qui la couvre, le reste
+      // retourne au pool de chutes — exactement ce que fera `Inventory.request`.
+      const src = stockLens.filter((s) => (counts.get(s) ?? 0) > 0 && s > l).pop();
+      if (src == null) return;
+      counts.set(src, (counts.get(src) ?? 0) - 1);
+      const rest = src - l - jointGap;
+      if (rest >= minCut) counts.set(rest, (counts.get(rest) ?? 0) + 1);
+    };
+
+    const out: number[] = [];
+    let x = runStart;
+    let guard = 0;
+    while (x < runEnd - 1e-3 && guard++ < 5000) {
+      const avail = runEnd - x;
+      const live = [...counts.entries()].filter(([, n]) => n > 0).map(([l]) => l);
+      const longest = live.length ? Math.max(...live) : nominalLength;
+      const room = Math.min(avail, longest);
+      const pick = chooseLength(x, room, avail, near, far, prevDrift, live, draw);
+      const want = fixJoint(x, Math.min(pick, room), room, avail, near, far);
+      const len = Math.min(avail, Math.max(want, Math.min(minCut, avail)));
+      if (len <= 1e-3) break;
+      take(len);
+      out.push(len);
+      x += len + jointGap;
+    }
+    return out;
+  };
+
+  /** Note une plage découpée : plus c'est haut, meilleur c'est. */
+  const scoreRun = (
+    runStart: number, runEnd: number, lens: number[], near: number[], far: number[],
+    prevDrift: number, startsOnOffcut: boolean,
+  ): number => {
+    let s = 0;
+    let x = runStart;
+    let lastDrift = prevDrift;
+    for (let i = 0; i < lens.length; i++) {
+      const end = x + lens[i];
+      const closes = runEnd - end <= tol;
+      if (!closes) {
+        const dN = gapTo(x, lens[i], near);
+        const dF = gapTo(x, lens[i], far);
+        // Faute sur la voisine immédiate : c'est la règle, elle domine tout le reste.
+        if (dN < minOffset - 1e-6) s -= 1000 + (minOffset - dN) * 20;
+        else s += Math.min(dN, minOffset * 1.5) * 2;
+        if (dF < H_JOINT_MIN - 1e-6) s -= 200; // joint en « H »
+        // Escalier : même décalage, même sens, d'une rangée à l'autre.
+        const d = signedGapTo(x, lens[i], near);
+        if (Number.isFinite(d) && Number.isFinite(lastDrift)
+          && Math.abs(d - lastDrift) < 4 && Math.abs(d) > 5) s -= 120;
+        if (Number.isFinite(d)) lastDrift = d;
+      }
+      // Un bout plus court que la coupe minimale n'est pas posable.
+      if (lens[i] < minCut - 1e-6 && !closes) s -= 400;
+      x = end + jointGap;
+    }
+    // Démarrer la rangée sur une chute est la règle du métier (Pergo : « start new rows
+    // with pieces trimmed from previous row »), mais elle reste une PRÉFÉRENCE : imposée,
+    // elle recrée un escalier quand toutes les lames se valent.
+    if (startsOnOffcut) s += 40;
+    return s;
+  };
+
   const planRow = (rowTop: number) => {
     const rowBottom = Math.min(rowTop + poseWidth, bb.maxY);
     // Rangées voisines immédiates (contrainte dure) et suivantes (simple préférence) :
@@ -284,24 +379,33 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
 
     for (let ri = 0; ri < runs.length; ri++) {
       const run = runs[ri];
-      let x = run.start;
-      let guard = 0;
-      while (x < run.end - 1e-3 && guard++ < 5000) {
-      const avail = run.end - x; // matière continue restante jusqu'au bout de la plage
-      const stockLens = inventory.availableLengths(poseWidth);
-      const longest = stockLens.length ? Math.max(...stockLens) : nominalLength;
-      const room = Math.min(avail, longest); // plus longue lame réellement posable ici
 
-      const pick = chooseLength(x, room, avail, near, far, prevDrift);
-      // `chooseLength` ne peut proposer que des longueurs EXISTANTES. Quand le stock est
-      // à longueurs rondes (40…160), les joints retombent tous sur la même trame et il
-      // arrive qu'AUCUNE lame entière ne respecte le décalage minimal. Il faut alors
-      // couper — c'est ce que fait le poseur. `fixJoint` était placé derrière le `??`,
-      // donc appelé seulement quand la lame entière manquait : exactement le cas où on
-      // n'en avait pas besoin. Résultat : des joints alignés d'une rangée à l'autre.
-      const want = fixJoint(x, Math.min(pick, room), room, avail, near, far);
-      const cut = (Math.abs(want - pick) <= 1e-6 ? inventory.takeExact(pick, poseWidth) : null)
-        ?? inventory.request(want, poseWidth);
+      // On présente la plage à sec plusieurs fois avant de « clouer » : chaque essai tire
+      // ses départages au hasard, on note la plage ENTIÈRE et on garde la meilleure. Le
+      // glouton, lui, ne revenait jamais sur son premier choix.
+      const { offcuts } = inventory.availableCounts(poseWidth);
+      let bestLens: number[] = [];
+      let bestScore = -Infinity;
+      for (let attempt = 0; attempt < RUN_ATTEMPTS; attempt++) {
+        // Graine dérivée de la position : même plan pour la même graine de projet.
+        const draw = mulberry32(seed + rowKey(rowTop) * 131 + ri * 17 + attempt * 7919);
+        const lens = planRun(run.start, run.end, near, far, prevDrift, draw);
+        if (!lens.length) continue;
+        const sc = scoreRun(
+          run.start, run.end, lens, near, far, prevDrift, offcuts.has(lens[0]),
+        );
+        if (sc > bestScore) { bestScore = sc; bestLens = lens; }
+      }
+      if (!bestLens.length) continue;
+
+      let x = run.start;
+      for (let li = 0; li < bestLens.length; li++) {
+      const avail = run.end - x; // matière continue restante jusqu'au bout de la plage
+      if (avail <= 1e-3) break;
+      const want = Math.min(bestLens[li], avail);
+      // La simulation a raisonné sur une copie fidèle des quantités : la lame exacte doit
+      // exister. Sinon on retombe sur `request`, qui coupera dans une plus longue.
+      const cut = inventory.takeExact(want, poseWidth) ?? inventory.request(want, poseWidth);
 
       const placedLen = Math.min(avail, cut.provided);
       if (placedLen <= 1e-3) break;

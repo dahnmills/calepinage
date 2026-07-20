@@ -118,6 +118,30 @@ export class Inventory {
   }
 
   /**
+   * Longueurs disponibles AVEC leur nombre, chutes comprises (`fromOffcut` marque celles
+   * qui viennent du pool). Permet au motif de SIMULER une rangée entière — essayer
+   * plusieurs découpages et garder la meilleure — sans rien consommer. Sans compte, une
+   * simulation réutiliserait dix fois la seule lame de 160 qui reste.
+   */
+  availableCounts(width: number): { counts: Map<number, number>; offcuts: Set<number> } {
+    const counts = new Map<number, number>();
+    const add = (len: number, n: number) => counts.set(len, (counts.get(len) ?? 0) + n);
+    for (const b of this.batchesForWidth(width)) {
+      const n = this.remaining.get(b.id) ?? 0;
+      if (n > 0) add(b.length, n);
+    }
+    const offcuts = new Set<number>();
+    if (this.reuse) {
+      for (const o of this.offcuts) {
+        if (Math.abs(o.width - width) > 0.5) continue;
+        add(o.length, 1);
+        offcuts.add(o.length);
+      }
+    }
+    return { counts, offcuts };
+  }
+
+  /**
    * Sort une lame d'une longueur EXACTE (chute d'abord). Sert au motif, qui choisit lui-même
    * la longueur qui place le mieux son joint, puis vient la réserver ici.
    */

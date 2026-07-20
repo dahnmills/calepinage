@@ -123,7 +123,46 @@ des coupes est l'arbitrage, pas un effet de bord.
 - **Ramener la 1ᵉʳᵉ lame sur une trame décalée** (pour faire vivre `offsetMode`) : les
   joints fautifs remontaient à ~23 % et les bouts sous `minCut` de 13 à 18.
 
+### Recherche locale par rangée
+
+`planRun` découpe une plage ENTIÈRE sur une **copie** du stock (`Inventory.availableCounts`,
+qui rend les longueurs AVEC leur nombre — sans les comptes, une simulation réutiliserait dix
+fois la dernière lame de 160). On tire `RUN_ATTEMPTS = 12` découpages, on note la plage
+entière (`scoreRun`) et on garde la meilleure. C'est le « racking » du poseur : présenter la
+rangée à sec avant de clouer.
+
+Sans exploration, les 12 essais rendaient le MÊME découpage (le tirage ne départageait que
+les ex æquo). `chooseLength` tire donc au sort parmi les choix dont la note est à moins de
+`EXPLORE_MARGIN = 30` du meilleur — marge très inférieure à la pénalité de faute (−1000),
+donc un choix fautif ne peut jamais entrer dans le tirage.
+
+Gain réel mais modeste : 5,6 % → 5,2 % de joints fautifs sur 120 simulations.
+
+### LA VRAIE LIMITE : la contrainte est quasi infaisable pour ce stock
+
+Mesuré sur le plan réel `(4).json`, en ne faisant varier QUE `minJointOffset` :
+
+| minJointOffset | joints fautifs |
+|---|---|
+| 15 cm | **0,4 %** |
+| 20 cm | 4,2 % |
+| **24 cm** (= 2 × largeur, valeur DTU) | **9,1 %** |
+| 26 cm | 22,3 % |
+| **30 cm** (valeur fabricant, réglage actuel) | **23,3 %** |
+| 35 cm | 49,6 % |
+
+Le stock de l'utilisateur est dominé par des lames COURTES (81 × 60 cm, 57 × 80, 55 × 90 ;
+seulement 2 × 120, 11 × 140, 1 × 160). Dans une plage de 304 cm, cela fait 4 à 5 lames,
+donc 4 joints par rangée. Or 4 joints voisins interdisent chacun ±30 cm, soit 240 cm
+d'exclusion sur 304 cm utiles : il ne reste que ~64 cm pour placer 4 joints espacés d'au
+moins `minCut`. **Aucun algorithme ne peut satisfaire ça.**
+
+Les ~23 % restants ne sont donc PAS un défaut de l'algorithme mais une contrainte
+sur-spécifiée. Ne pas continuer à optimiser la recherche : c'est le réglage qu'il faut
+corriger (24 cm = valeur DTU pour des lames de 12 cm), ou le stock qu'il faut allonger.
+
 ### Ce qui RESTE ouvert
+
 
 - **Plans réels à ~25 % de fautes** alors que les pièces simples sont à 0–1 %. Localisé :
   les plages d'environ 250 cm (couloir entre deux cloisons) concentrent 55 % des fautes.
