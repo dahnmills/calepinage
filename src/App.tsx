@@ -37,7 +37,14 @@ export default function App() {
   return (
     <div className="app">
       <header className="app-header">
-        <h1>🪵 Calepinage parquet</h1>
+        <h1>
+          🪵 Calepinage parquet
+          {/* Repère de version : permet de vérifier CE QUI tourne avant de conclure
+              qu'un correctif n'a rien changé. */}
+          <span className="build-stamp" title="Version déployée (commit · compilation)">
+            {__BUILD__}
+          </span>
+        </h1>
 
         <div className="header-toggles">
           <label className="cut-toggle">
