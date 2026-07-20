@@ -61,6 +61,12 @@ Helper `dedupePoints` (`src/model/geometry.ts`), appliqué :
   qui passe (bug « je vise 117, la face est à 119,8, ça colle sur la face »).
   Mesure : `min(8 / view.scale, 25)` cm, `guideThreshold: 0`.
   Tracé : `guideThreshold: 2` cm — juste de quoi absorber un décroché millimétrique.
+- **Résolution de travail = le dixième de cm.** `cursorCm` était arrondi au **cm entier**
+  alors que le clic partait du curseur **brut** : l'aperçu ne pouvait tomber que sur des
+  positions entières (la cote sautait de ~1 cm, valeurs intermédiaires inatteignables) et
+  la valeur lue ne correspondait pas à celle enregistrée (173,6 à l'écran → 173,5 posé).
+  Aperçu, valeur affichée et clic passent maintenant tous par **`measurePoint()`**, avec
+  la même entrée arrondie au dixième (`tenth()`). Ne jamais court-circuiter ce chemin.
 - **Alt maintenu = aucun aimant** (état `freeSnap`), pour la mesure comme pour le tracé :
   le point se pose pile sous le curseur, sans recalage de cote. Suivi au `mousemove`
   (`e.altKey`) + `keydown`/`keyup` + `blur` (sinon l'aimant reste coupé après un

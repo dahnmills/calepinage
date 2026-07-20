@@ -197,6 +197,16 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
     [measureStart, editor, view.scale, measureGuides, axisLock, freeSnap],
   );
 
+  /**
+   * Point de cote définitif. L'aperçu, la valeur affichée et le clic passent TOUS par ici,
+   * avec la même entrée arrondie au dixième : sinon on lit 173,6 à l'écran et on enregistre
+   * 173,5 (l'aperçu partait du curseur arrondi au cm, le clic du curseur brut).
+   */
+  const measurePoint = useCallback(
+    (raw: Point): Point => tenth(snapMeasure(tenth(raw)).point),
+    [snapMeasure],
+  );
+
   // --- Ligne de départ ---
   // Repère de pose pour une orientation donnée (partagé avec le calcul de calepinage).
   const frameFor = useCallback(
@@ -456,7 +466,7 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
     for (const m of measures) drawMeasure(ctx, m.a, m.b, view, false);
     if (tool === 'measure' && cursorCm) {
       const snap = snapMeasure(cursorCm);
-      if (measureStart) drawMeasure(ctx, measureStart, snap.point, view, true);
+      if (measureStart) drawMeasure(ctx, measureStart, measurePoint(cursorCm), view, true);
       drawSnapMark(ctx, snap, view);
     }
     } catch (err) {
@@ -653,7 +663,11 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
     if (tool === 'measure' && e.shiftKey !== axisLock) setAxisLock(e.shiftKey);
     if (e.altKey !== freeSnap) setFreeSnap(e.altKey);
     if (isDrawing || tool === 'edit' || tool === 'startline' || tool === 'measure') {
-      setCursorCm({ x: Math.round(w.x), y: Math.round(w.y) });
+      // Au DIXIÈME de cm, pas au cm entier : c'est ce point qui alimente l'aperçu et
+      // l'affichage de la cote. Arrondi au cm, l'aperçu ne pouvait tomber que sur des
+      // positions entières -> la cote sautait de ~1 cm et les valeurs intermédiaires
+      // étaient inatteignables.
+      setCursorCm(tenth(w));
     }
 
     // Glisser la ligne de départ (édition).
@@ -785,8 +799,7 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
         if (hit) { removeMeasure(hit.id); return; }
       }
       if (measureStart) snapshot();
-      const p = snapMeasure(w).point;
-      const q = { x: Math.round(p.x * 10) / 10, y: Math.round(p.y * 10) / 10 };
+      const q = measurePoint(w);
       if (measureStart) finishMeasure(q); else startMeasure(q);
       return;
     }
@@ -1084,7 +1097,7 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
       {tool === 'measure' && (
         <div className="draw-hud">
           {measureStart && cursorCm ? (() => {
-            const p = snapMeasure(cursorCm).point;
+            const p = measurePoint(cursorCm);
             const d = dist(measureStart, p);
             // Angle ramené dans [-90, 90] : une cote n'a pas de sens, seulement une pente.
             let ang = (Math.atan2(p.y - measureStart.y, p.x - measureStart.x) * 180) / Math.PI;
@@ -1152,7 +1165,7 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
 
       {/* Relevé de position du curseur */}
       {cursorCm && (
-        <div className="cursor-hud">x {cursorCm.x} · y {cursorCm.y} cm</div>
+        <div className="cursor-hud">x {fmtLen(cursorCm.x)} · y {fmtLen(cursorCm.y)} cm</div>
       )}
 
       {/* Pièce sélectionnée : nom et exclusion */}
@@ -1928,6 +1941,11 @@ function drawHole(ctx: CanvasRenderingContext2D, poly: Point[], v: View) {
   ctx.strokeStyle = '#64748b';
   ctx.lineWidth = 1.5;
   ctx.stroke();
+}
+
+/** Arrondi d'un point au dixième de cm — la résolution de travail des cotes. */
+function tenth(p: Point): Point {
+  return { x: Math.round(p.x * 10) / 10, y: Math.round(p.y * 10) / 10 };
 }
 
 /** Cote au dixième de cm, sans « ,0 » inutile : 530 reste 530, 29,5 s'affiche 29,5. */
