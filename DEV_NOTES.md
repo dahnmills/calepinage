@@ -138,28 +138,47 @@ donc un choix fautif ne peut jamais entrer dans le tirage.
 
 Gain réel mais modeste : 5,6 % → 5,2 % de joints fautifs sur 120 simulations.
 
-### LA VRAIE LIMITE : la contrainte est quasi infaisable pour ce stock
+### Un plan doit TOUJOURS être posable
 
-Mesuré sur le plan réel `(4).json`, en ne faisant varier QUE `minJointOffset` :
+Règle posée par l'utilisateur : « il faut toujours que ce soit faisable, le parquet je dois
+le poser ». Un plan « conforme mais impossible » n'a aucune valeur.
+
+**Objectif max-min, jamais de relâchement du seuil.** Abaisser `minJointOffset` par paliers
+dès qu'il coince a été implémenté et MESURÉ : c'est pire (11,3 % de joints sous la valeur
+demandée contre 5,2 %), car toute la rangée se rabat sur le seuil dégradé, y compris là où
+la valeur demandée passait. On garde donc la cible et on classe les découpages par :
+1. le moins de fautes, 2. le PLUS GRAND écart minimal, 3. la note.
+Là où c'est faisable on obtient la valeur demandée ; ailleurs, le meilleur écart possible.
+
+**Lames fantômes de 8 mm — corrigé.** `planRun` bouclait tant que `x < runEnd - 1e-3` : un
+reliquat de 0,8 cm (la dilatation périmétrique) donnait une lame de 0,8 cm en bout de plage.
+Invisible comme lame, mais elle créait un FAUX joint collé à celui de la rangée voisine —
+c'est ce que l'utilisateur voyait. La boucle s'arrête maintenant dans la tolérance de coupe,
+et un talon plus court que `minCut` est absorbé dans la lame précédente.
+Effet : plus AUCUNE lame sous `minCut` sur 120 simulations (3,4 en moyenne avant), et les
+joints collés passent de 21 à 4 sur le plan réel `(3)`.
+
+`JOINT_PENALTY = 60` : coût d'un joint de plus dans une plage. Moins de joints = décalage
+plus facile à tenir. Valeur retenue au banc sur 600 simulations, meilleure sur TOUS les
+indicateurs à la fois.
+
+### La limite qui reste : le stock
+
+Sur le plan réel `(4)`, en ne faisant varier QUE `minJointOffset` :
 
 | minJointOffset | joints fautifs |
 |---|---|
-| 15 cm | **0,4 %** |
+| 15 cm | 0,4 % |
 | 20 cm | 4,2 % |
 | **24 cm** (= 2 × largeur, valeur DTU) | **9,1 %** |
-| 26 cm | 22,3 % |
 | **30 cm** (valeur fabricant, réglage actuel) | **23,3 %** |
 | 35 cm | 49,6 % |
 
-Le stock de l'utilisateur est dominé par des lames COURTES (81 × 60 cm, 57 × 80, 55 × 90 ;
-seulement 2 × 120, 11 × 140, 1 × 160). Dans une plage de 304 cm, cela fait 4 à 5 lames,
-donc 4 joints par rangée. Or 4 joints voisins interdisent chacun ±30 cm, soit 240 cm
-d'exclusion sur 304 cm utiles : il ne reste que ~64 cm pour placer 4 joints espacés d'au
-moins `minCut`. **Aucun algorithme ne peut satisfaire ça.**
-
-Les ~23 % restants ne sont donc PAS un défaut de l'algorithme mais une contrainte
-sur-spécifiée. Ne pas continuer à optimiser la recherche : c'est le réglage qu'il faut
-corriger (24 cm = valeur DTU pour des lames de 12 cm), ou le stock qu'il faut allonger.
+Le stock est dominé par des lames COURTES (81 × 60 cm, 57 × 80, 55 × 90 ; 2 × 120 seulement).
+Dans une plage de 304 cm cela fait 4 joints par rangée. Or 4 joints voisins interdisent
+chacun ±30 cm, soit 240 cm d'exclusion sur 304 cm utiles. La contrainte est sur-spécifiée
+pour ce stock : c'est le réglage (24 cm) ou le stock (lames plus longues) qu'il faut
+corriger, pas l'algorithme.
 
 ### Ce qui RESTE ouvert
 

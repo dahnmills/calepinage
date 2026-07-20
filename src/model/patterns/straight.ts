@@ -104,6 +104,14 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
   const H_JOINT_MIN = 10;
   /** Découpages tirés au sort par plage avant d'en retenir un. Réglé au banc de mesure. */
   const RUN_ATTEMPTS = 12;
+  /**
+   * Coût d'un joint de plus dans une plage. Moins de joints = décalage plus facile à tenir
+   * ET rendu plus calme. Valeur retenue au banc (600 simulations) : meilleure sur tous les
+   * indicateurs à la fois — fautes, chute et nombre de coupes.
+   */
+  const JOINT_PENALTY = 60;
+  /** Écart réellement obtenu sur chaque plage, pour pouvoir dire ce qu'on a vraiment tenu. */
+  const achievedGaps: number[] = [];
   /** Écart de note en deçà duquel deux longueurs sont jugées équivalentes (exploration). */
   const EXPLORE_MARGIN = 30;
 
@@ -142,7 +150,7 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
    */
   const chooseLength = (
     x: number, room: number, avail: number, near: number[], far: number[], prevDrift: number,
-    live: number[], draw: () => number,
+    live: number[], draw: () => number, off: number,
   ): number => {
     // `live` = longueurs disponibles dans la SIMULATION en cours, pas dans le stock réel :
     // une plage se planifie entièrement avant d'être posée, sinon on ne peut pas la noter.
@@ -157,7 +165,7 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
 
     // Au-delà de ce seuil, un joint est « bien écarté » : inutile de chercher mieux, sinon
     // on n'utiliserait plus qu'une seule longueur et le calepinage deviendrait monotone.
-    const enough = Math.max(minOffset, 1) * 1.5;
+    const enough = Math.max(off, 1) * 1.5;
     const score = (l: number) => {
       // La dernière lame bute sur le mur : sa fin n'est pas un joint, elle ne gêne personne.
       if (avail - l <= tol) return 5 + l * 0.05;
@@ -165,7 +173,7 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
       const dNear = Math.min(gapTo(x, l, near), enough);
       const dFar = gapTo(x, l, far);
       // Un joint sous le décalage minimal est une faute : on la sanctionne lourdement.
-      const fault = dNear < minOffset - 1e-6 ? -1000 + dNear * 10 : dNear * 3;
+      const fault = dNear < off - 1e-6 ? -1000 + dNear * 10 : dNear * 3;
       // Un joint aligné avec celui d'une rangée sur deux dessine un escalier régulier :
       // c'est le défaut qu'on voit le plus sur un plancher, il faut le casser aussi.
       const stair = dFar < 10 ? -300 + dFar * 4 : Math.min(dFar, enough);
@@ -198,7 +206,7 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
         if (l2 > rest + tol) return false;
         if (rest - l2 > tol && rest - l2 < minCut) return false; // laisserait un bout inposable
         if (rest - l2 <= tol) return true; // l2 ferme la rangée contre le mur
-        return gapTo(x2, l2, near) >= minOffset - 1e-6;
+        return gapTo(x2, l2, near) >= off - 1e-6;
       });
     };
 
@@ -218,18 +226,19 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
    * mais jamais pour gagner trois centimètres — la coupe doit valoir le trait de scie.
    */
   const fixJoint = (
-    x: number, len: number, maxLen: number, avail: number, neighbours: number[], second: number[] = [],
+    x: number, len: number, maxLen: number, avail: number, neighbours: number[], second: number[],
+    off: number,
   ): number => {
-    if (minOffset <= 0 || (neighbours.length === 0 && second.length === 0)) return len;
+    if (off <= 0 || (neighbours.length === 0 && second.length === 0)) return len;
     // Joint en « H » : deux joints alignés de part et d'autre d'UNE rangée (n et n+2).
     // Absent du DTU mais explicitement proscrit par les guidelines NWFA (« avoid H
     // patterns »), avec ~10 cm de marge. `fixJoint` ne regardait que la voisine immédiate :
     // dès qu'elle était satisfaite il ne coupait plus, et la rangée reproduisait la n−2.
-    const secondMin = Math.min(minOffset, H_JOINT_MIN);
+    const secondMin = Math.min(off, H_JOINT_MIN);
     // Une lame qui ferme la rangée bute sur le mur : sa fin n'est pas un joint, elle ne
     // gêne personne et n'a aucune raison d'être recoupée.
     const closesRow = (l: number) => avail - l <= tol;
-    const hitsNear = (l: number) => !closesRow(l) && gapTo(x, l, neighbours) < minOffset - 1e-6;
+    const hitsNear = (l: number) => !closesRow(l) && gapTo(x, l, neighbours) < off - 1e-6;
     const hitsSecond = (l: number) => !closesRow(l) && gapTo(x, l, second) < secondMin - 1e-6;
     if (!hitsNear(len) && !hitsSecond(len)) return len;
 
@@ -239,7 +248,7 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
     // point tombe souvent dans la plage interdite d'un AUTRE joint et se faisait éliminer,
     // ne laissant aucun candidat : la lame restait alors fautive.
     const cand = [len, minCut, maxLen];
-    for (const j of neighbours) cand.push(j - minOffset - x, j + minOffset - x);
+    for (const j of neighbours) cand.push(j - off - x, j + off - x);
     for (const j of second) cand.push(j - secondMin - x, j + secondMin - x);
     const placeable = cand
       .map((l) => Math.round(l * 10) / 10) // au millimètre : pas de cote biscornue
@@ -276,7 +285,7 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
    */
   const planRun = (
     runStart: number, runEnd: number, near: number[], far: number[], prevDrift: number,
-    draw: () => number,
+    draw: () => number, off: number,
   ): number[] => {
     const { counts } = inventory.availableCounts(poseWidth);
     const stockLens = [...counts.keys()].sort((a, b) => b - a);
@@ -295,18 +304,28 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
     const out: number[] = [];
     let x = runStart;
     let guard = 0;
-    while (x < runEnd - 1e-3 && guard++ < 5000) {
+    // S'arrêter dans la TOLÉRANCE de coupe : un reliquat de 8 mm n'est pas une lame à
+    // poser, c'est du bruit numérique. La boucle s'arrêtait à 1e-3, donc elle posait des
+    // lames de 0,8 cm en bout de plage — invisibles comme lames, mais elles créaient un
+    // faux joint collé à celui de la rangée voisine.
+    while (x < runEnd - Math.max(tol, 1e-3) && guard++ < 5000) {
       const avail = runEnd - x;
       const live = [...counts.entries()].filter(([, n]) => n > 0).map(([l]) => l);
       const longest = live.length ? Math.max(...live) : nominalLength;
       const room = Math.min(avail, longest);
-      const pick = chooseLength(x, room, avail, near, far, prevDrift, live, draw);
-      const want = fixJoint(x, Math.min(pick, room), room, avail, near, far);
+      const pick = chooseLength(x, room, avail, near, far, prevDrift, live, draw, off);
+      const want = fixJoint(x, Math.min(pick, room), room, avail, near, far, off);
       const len = Math.min(avail, Math.max(want, Math.min(minCut, avail)));
       if (len <= 1e-3) break;
       take(len);
       out.push(len);
       x += len + jointGap;
+    }
+    // Talon plus court que la coupe minimale : on l'absorbe dans la lame précédente
+    // plutôt que de le poser. Une lame de 8 mm ne se pose pas.
+    while (out.length >= 2 && out[out.length - 1] < minCut - 1e-6) {
+      const tail = out.pop() as number;
+      out[out.length - 1] += tail + jointGap;
     }
     return out;
   };
@@ -314,9 +333,11 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
   /** Note une plage découpée : plus c'est haut, meilleur c'est. */
   const scoreRun = (
     runStart: number, runEnd: number, lens: number[], near: number[], far: number[],
-    prevDrift: number, startsOnOffcut: boolean,
-  ): number => {
+    prevDrift: number, startsOnOffcut: boolean, off: number,
+  ): { score: number; violations: number; minGap: number } => {
     let s = 0;
+    let violations = 0;
+    let minGap = Infinity;
     let x = runStart;
     let lastDrift = prevDrift;
     for (let i = 0; i < lens.length; i++) {
@@ -326,8 +347,9 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
         const dN = gapTo(x, lens[i], near);
         const dF = gapTo(x, lens[i], far);
         // Faute sur la voisine immédiate : c'est la règle, elle domine tout le reste.
-        if (dN < minOffset - 1e-6) s -= 1000 + (minOffset - dN) * 20;
-        else s += Math.min(dN, minOffset * 1.5) * 2;
+        if (Number.isFinite(dN)) minGap = Math.min(minGap, dN);
+        if (dN < off - 1e-6) { violations++; s -= 1000 + (off - dN) * 20; }
+        else s += Math.min(dN, off * 1.5) * 2;
         if (dF < H_JOINT_MIN - 1e-6) s -= 200; // joint en « H »
         // Escalier : même décalage, même sens, d'une rangée à l'autre.
         const d = signedGapTo(x, lens[i], near);
@@ -343,7 +365,10 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
     // with pieces trimmed from previous row »), mais elle reste une PRÉFÉRENCE : imposée,
     // elle recrée un escalier quand toutes les lames se valent.
     if (startsOnOffcut) s += 40;
-    return s;
+    // Moins de joints = plus facile à écarter ET plus beau : une plage tenue par 2 lames
+    // vaut mieux que la même tenue par 5. Décisif avec un stock de lames courtes.
+    s -= lens.length * JOINT_PENALTY;
+    return { score: s, violations, minGap };
   };
 
   const planRow = (rowTop: number) => {
@@ -384,24 +409,47 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
       // ses départages au hasard, on note la plage ENTIÈRE et on garde la meilleure. Le
       // glouton, lui, ne revenait jamais sur son premier choix.
       const { offcuts } = inventory.availableCounts(poseWidth);
+
+      // TOUJOURS POSABLE, ET LE MIEUX POSSIBLE.
+      //
+      // Le décalage demandé n'est pas toujours atteignable : une plage de 304 cm tenue par
+      // 5 lames de 60-90 porte 4 joints, et 4 joints voisins interdisent chacun ±30 cm,
+      // soit 240 cm d'exclusion sur 304 cm utiles. Aucun découpage ne satisfait la règle.
+      // Refuser n'a aucun sens — le parquet doit être posé.
+      //
+      // On ne baisse PAS la cible pour autant : abaisser le seuil dès qu'il coince a été
+      // essayé et mesuré, et c'est pire (11,3 % de joints sous la valeur demandée contre
+      // 5,2 %) — toute la rangée se rabat sur le seuil dégradé, y compris là où le décalage
+      // demandé passait. On garde donc la cible et on classe les découpages par : d'abord
+      // le moins de fautes, puis le PLUS GRAND écart minimal (max-min), puis la note. Là où
+      // c'est faisable on obtient la valeur demandée ; là où ça ne l'est pas, on obtient le
+      // meilleur écart possible, jamais un joint collé.
       let bestLens: number[] = [];
+      let bestViol = Infinity;
+      let bestGap = -Infinity;
       let bestScore = -Infinity;
       for (let attempt = 0; attempt < RUN_ATTEMPTS; attempt++) {
         // Graine dérivée de la position : même plan pour la même graine de projet.
         const draw = mulberry32(seed + rowKey(rowTop) * 131 + ri * 17 + attempt * 7919);
-        const lens = planRun(run.start, run.end, near, far, prevDrift, draw);
+        const lens = planRun(run.start, run.end, near, far, prevDrift, draw, minOffset);
         if (!lens.length) continue;
-        const sc = scoreRun(
-          run.start, run.end, lens, near, far, prevDrift, offcuts.has(lens[0]),
+        const r = scoreRun(
+          run.start, run.end, lens, near, far, prevDrift, offcuts.has(lens[0]), minOffset,
         );
-        if (sc > bestScore) { bestScore = sc; bestLens = lens; }
+        const better = r.violations < bestViol
+          || (r.violations === bestViol && r.minGap > bestGap + 1e-6)
+          || (r.violations === bestViol && Math.abs(r.minGap - bestGap) <= 1e-6 && r.score > bestScore);
+        if (better) {
+          bestViol = r.violations; bestGap = r.minGap; bestScore = r.score; bestLens = lens;
+        }
       }
       if (!bestLens.length) continue;
+      if (Number.isFinite(bestGap) && bestGap > 0) achievedGaps.push(bestGap);
 
       let x = run.start;
       for (let li = 0; li < bestLens.length; li++) {
       const avail = run.end - x; // matière continue restante jusqu'au bout de la plage
-      if (avail <= 1e-3) break;
+      if (avail <= Math.max(tol, 1e-3)) break; // reliquat dans la tolérance : rien à poser
       const want = Math.min(bestLens[li], avail);
       // La simulation a raisonné sur une copie fidèle des quantités : la lame exacte doit
       // exister. Sinon on retombe sur `request`, qui coupera dans une plus longue.
