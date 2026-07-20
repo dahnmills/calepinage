@@ -50,6 +50,45 @@ Helper `dedupePoints` (`src/model/geometry.ts`), appliqué :
 
 ---
 
+## Calepinage — décalage des joints
+
+`fixJoint` (couper pour écarter un joint) était placé DERRIÈRE le `??` :
+
+    inventory.takeExact(pick) ?? inventory.request(fixJoint(...))
+
+donc appelé seulement quand la lame entière manquait — exactement le cas où on n'en avait
+pas besoin. Or `chooseLength` ne propose que des longueurs EXISTANTES : avec un stock à
+longueurs rondes (40…160), les joints retombent tous sur la même trame et il arrive
+qu'AUCUNE lame entière ne respecte `minJointOffset`. Il faut alors couper.
+→ `fixJoint` est calculé AVANT, et décide s'il faut prendre une lame entière ou couper.
+
+`fixJoint` ne testait que « pile à ±minOffset d'un joint voisin ». Ces points tombent
+souvent dans la plage interdite d'un AUTRE joint → aucun candidat → lame fautive laissée
+telle quelle. Il teste maintenant aussi `len`, `minCut` et `maxLen`.
+
+`room` (cellule, plafonnée à la nominale) et `avail` (matière continue restante) sont
+désormais distincts : juger le reste sur la cellule déclarait posable un reliquat qui
+finissait en bout de 8 cm.
+
+**Mesuré sur `calepinage-2026-07-20 (3).json` :** joints fautifs (< 30 cm) 41,9 % → 11,9 %.
+Contrepartie : chute 3,0 % → 4,3 %, coupes 63 → 83. Casser des joints alignés avec un
+stock à longueurs rondes SUPPOSE de couper — c'est un arbitrage, pas un défaut.
+
+### `offsetMode` (1/2, 1/3, aléatoire) est quasi inopérant — connu
+
+`shiftFor(k)` décale le `x` de départ de la rangée, mais la boucle fait
+`if (run.start > x) { x = run.start; continue; }` : la rangée se recale sur le bord de la
+matière et le décalage est perdu. 1/2, 1/3 et « aucun » rendent le même plan.
+
+Tentative de correction (première lame ramenée sur la trame décalée) : `offsetMode`
+redevient visible, MAIS les joints fautifs remontent à ~23 % et les bouts sous `minCut`
+passent de 13 à 18. Abandonné — la qualité des joints prime. Le vrai moteur du décalage
+est `chooseLength`/`fixJoint`, pas une trame théorique. À trancher avec l'utilisateur :
+soit rendre `offsetMode` impératif (et perdre en qualité de joints), soit retirer/renommer
+le réglage.
+
+---
+
 ## Cotes automatiques (orange, face à face)
 
 - Affichées **aussi après le calepinage**. Elles étaient masquées par un `!result` : or

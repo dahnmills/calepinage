@@ -114,12 +114,18 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
    * de chaque côté, la plus proche pesant le plus), et l'on retient la mieux placée.
    * À qualité égale, la lame la plus longue gagne : moins de coupes, moins de chutes.
    */
-  const chooseLength = (x: number, room: number, near: number[], far: number[]): number => {
+  /**
+   * `room` = ce qui tient dans la cellule courante (plafonné à la longueur nominale).
+   * `avail` = matière CONTINUE restante jusqu'au bout de la plage (mur du fond ou cloison).
+   * Le reste doit se juger sur `avail` : mesuré sur la cellule, il déclarait posable un
+   * reliquat qui, une fois la rangée poursuivie, finissait en bout de 8 cm.
+   */
+  const chooseLength = (x: number, room: number, avail: number, near: number[], far: number[]): number => {
     // Une lame ne peut pas dépasser la place restante ; et si elle laisse un reste plus
     // court que la coupe minimale, ce reste serait inposable — on l'écarte.
     const stock = inventory.availableLengths(poseWidth).filter((l) => {
       if (l < minCut || l > room + tol) return false;
-      const rest = room - l;
+      const rest = avail - l;
       return rest <= tol || rest >= minCut;
     });
     if (stock.length === 0) return room; // rien ne convient : on comble en coupant
@@ -129,7 +135,7 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
     const enough = Math.max(minOffset, 1) * 1.5;
     const score = (l: number) => {
       // La dernière lame bute sur le mur : sa fin n'est pas un joint, elle ne gêne personne.
-      if (room - l <= tol) return 5 + l * 0.05;
+      if (avail - l <= tol) return 5 + l * 0.05;
 
       const dNear = Math.min(gapTo(x, l, near), enough);
       const dFar = gapTo(x, l, far);
@@ -149,7 +155,7 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
      * On regarde donc un cran plus loin — la lame retenue doit laisser une suite jouable.
      */
     const leavesAWay = (l: number): boolean => {
-      const rest = room - l;
+      const rest = avail - l;
       if (rest <= tol) return true; // cette lame ferme la rangée : rien après elle
       const x2 = x + l + jointGap;
       return stock.some((l2) => {
@@ -172,16 +178,29 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
    * Dernier recours quand aucune lame du stock ne convient : on coupe pour écarter le joint,
    * mais jamais pour gagner trois centimètres — la coupe doit valoir le trait de scie.
    */
-  const fixJoint = (x: number, len: number, maxLen: number, neighbours: number[]): number => {
+  const fixJoint = (x: number, len: number, maxLen: number, avail: number, neighbours: number[]): number => {
     if (minOffset <= 0 || neighbours.length === 0) return len;
-    const clash = (l: number) => gapTo(x, l, neighbours) < minOffset - 1e-6;
+    // Une lame qui ferme la rangée bute sur le mur : sa fin n'est pas un joint, elle ne
+    // gêne personne et n'a aucune raison d'être recoupée.
+    const closesRow = (l: number) => avail - l <= tol;
+    const clash = (l: number) => !closesRow(l) && gapTo(x, l, neighbours) < minOffset - 1e-6;
     if (!clash(len)) return len;
 
-    const cuts: number[] = [];
-    for (const j of neighbours) cuts.push(j - minOffset - x, j + minOffset - x);
-    const usable = cuts
+    // Chaque joint voisin interdit une plage de ±minOffset autour de lui. On cherche donc
+    // la longueur autorisée la PLUS PROCHE de celle qu'on voulait, en testant les bords de
+    // ces plages interdites — et pas seulement « pile à minOffset d'un joint », car un tel
+    // point tombe souvent dans la plage interdite d'un AUTRE joint et se faisait éliminer,
+    // ne laissant aucun candidat : la lame restait alors fautive.
+    const cand = [len, minCut, maxLen];
+    for (const j of neighbours) cand.push(j - minOffset - x, j + minOffset - x);
+    const usable = cand
       .map((l) => Math.round(l * 10) / 10) // au millimètre : pas de cote biscornue
-      .filter((l) => l >= minCut && l <= maxLen + 1e-6 && !clash(l))
+      .filter((l) => {
+        if (l < minCut - 1e-6 || l > maxLen + 1e-6 || clash(l)) return false;
+        // Le reste doit rester posable, sinon on déplace le problème sur la lame suivante.
+        const rest = avail - l;
+        return rest <= tol || rest >= minCut;
+      })
       .sort((a, b) => Math.abs(a - len) - Math.abs(b - len));
     return usable[0] ?? len;
   };
@@ -220,7 +239,8 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
       if (!run) { x += cellLen + jointGap; continue; }
       if (run.start > x + 1e-6) { x = run.start; continue; } // on démarre où la matière reprend
 
-      const room = Math.min(cellLen, Math.max(0, run.end - x)); // matière continue jusqu'ici
+      const avail = Math.max(0, run.end - x); // matière continue restante dans la plage
+      const room = Math.min(cellLen, avail); // ce qui tient dans la cellule courante
       if (room < 1e-3) { x += cellLen + jointGap; continue; }
       // La lame bute-t-elle sur une cloison (trou après) plutôt que sur le mur du fond ?
       const atCloison = run.end < bb.maxX - tol && runs.some((r) => r.start > run.end + tol);
@@ -229,9 +249,16 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
       // obtenue, et non l'inverse. Planifier d'abord puis affecter ensuite faisait diverger
       // les deux — joints imprévus, cases mal comblées, chutes de 9 cm.
       const rowMaxX = runs[runs.length - 1].end; // bout de matière de la rangée (mur du fond)
-      const pick = chooseLength(x, room, near, far);
-      const cut = inventory.takeExact(pick, poseWidth)
-        ?? inventory.request(fixJoint(x, Math.min(pick, room), room, near), poseWidth);
+      const pick = chooseLength(x, room, avail, near, far);
+      // `chooseLength` ne peut proposer que des longueurs EXISTANTES. Quand le stock est
+      // à longueurs rondes (40…160), les joints retombent tous sur la même trame et il
+      // arrive qu'AUCUNE lame entière ne respecte le décalage minimal. Il faut alors
+      // couper — c'est ce que fait le poseur. `fixJoint` était placé derrière le `??`,
+      // donc appelé seulement quand la lame entière manquait : exactement le cas où on
+      // n'en avait pas besoin. Résultat : des joints alignés d'une rangée à l'autre.
+      const want = fixJoint(x, Math.min(pick, room), room, avail, near);
+      const cut = (Math.abs(want - pick) <= 1e-6 ? inventory.takeExact(pick, poseWidth) : null)
+        ?? inventory.request(want, poseWidth);
 
       const placedLen = Math.min(room, cut.provided);
       if (placedLen <= 1e-3) { x += cellLen + jointGap; continue; }
