@@ -30,11 +30,19 @@ export default function ResultsPanel() {
         </div>
       )}
 
+      {stats.narrowRips > 0 && (
+        <div className="alert">
+          ⚠ <b>{stats.narrowRips} lame(s) à refendre sous {config.minRipWidth} cm</b> de large.
+          Elles sont bien posées — les retirer laisserait un vide contre le mur — mais ce sont
+          des coupes délicates. Décaler la ligne de départ ou l'orientation les fait souvent
+          disparaître.
+        </div>
+      )}
+
       {stats.droppedSlivers > 0 && (
         <div className="note">
-          <b>{stats.droppedSlivers} filet(s) écarté(s)</b> — trop étroits pour être posés
-          (moins de {config.minRipWidth} cm de large après refend). Ils tombent en rive :
-          la plinthe et le jeu de dilatation les couvrent. Le plan ne les demande donc pas.
+          <b>{stats.droppedSlivers} filet(s) écarté(s)</b> — moins d'un centimètre de large,
+          entièrement absorbés par le jeu de dilatation et la plinthe. Rien à couper.
         </div>
       )}
 

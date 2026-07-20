@@ -530,17 +530,52 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
       if (Number.isFinite(bestGap) && bestGap > 0) achievedGaps.push(bestGap);
 
       let x = run.start;
-      for (let li = 0; li < bestLens.length; li++) {
+      // On boucle jusqu'à COUVRIR la plage, pas jusqu'à épuiser le découpage prévu.
+      //
+      // La simulation raisonne sur une copie du stock ; à la pose, `request` peut fournir
+      // moins que demandé (chute plus courte, lot épuisé). Le découpage prévu se décale
+      // alors et la plage se terminait AVANT le mur : il restait un vrai trou de plusieurs
+      // centimètres contre le mur du fond. Un calepinage ne doit jamais laisser un vide
+      // qu'il faudra combler au chantier — au-delà du découpage prévu, on continue avec ce
+      // que le stock permet.
+      let li = 0;
+      let guard = 0;
+      while (x < run.end - Math.max(tol, 1e-3) && guard++ < 5000) {
       const avail = run.end - x; // matière continue restante jusqu'au bout de la plage
-      if (avail <= Math.max(tol, 1e-3)) break; // reliquat dans la tolérance : rien à poser
-      const want = Math.min(bestLens[li], avail);
+      const planned = li < bestLens.length ? bestLens[li] : null;
+      li++;
+      const fallback = () => {
+        const live = inventory.availableLengths(poseWidth); // décroissant
+        // Mêmes règles que le choix normal : la lame ne dépasse pas la place restante, et
+        // ne laisse pas un reliquat inposable. Sans ces gardes, le rattrapage bouchait le
+        // trou en semant des bouts sous la coupe minimale.
+        const ok = live.filter((l) => l <= avail + tol && (avail - l <= tol || avail - l >= minCut));
+        if (ok.length) return ok[0];
+        // Rien ne convient : on coupe pour couvrir la plage d'un seul tenant plutôt que de
+        // laisser un vide — un trou contre le mur est pire qu'une coupe de plus.
+        return Math.min(avail, Math.max(live[0] ?? avail, minCut));
+      };
+      let want = Math.min(planned ?? fallback(), avail);
+      // Si ce qui resterait APRÈS cette lame est plus court que la coupe minimale, on
+      // allonge cette lame jusqu'au mur au lieu de laisser un confetti derrière elle.
+      // Sans ça, boucher le trou produisait des morceaux de 3 cm — aussi inposables que le
+      // vide qu'ils comblaient.
+      if (avail - want > tol && avail - want < minCut) want = avail;
       // La simulation a raisonné sur une copie fidèle des quantités : la lame exacte doit
       // exister. Sinon on retombe sur `request`, qui coupera dans une plus longue.
       const cut = inventory.takeExact(want, poseWidth, avoidPlanks)
         ?? inventory.request(want, poseWidth, avoidPlanks);
       rowPlanks.add(cut.plankNo);
 
-      const placedLen = Math.min(avail, cut.provided);
+      let placedLen = Math.min(avail, cut.provided);
+      // Le stock a pu fournir moins que demandé (chute plus courte, lot épuisé). Si le
+      // reliquat qui suivrait était plus court que la coupe minimale, on RACCOURCIT cette
+      // lame pour que la suivante fasse au moins `minCut` : mieux vaut deux lames franches
+      // qu'une lame pleine suivie d'un confetti de 8 cm.
+      const left = avail - placedLen;
+      if (left > tol && left < minCut && avail >= 2 * minCut) {
+        placedLen = Math.max(minCut, avail - minCut);
+      }
       if (placedLen <= 1e-3) break;
 
       const placedRect: Point[] = [

@@ -245,6 +245,40 @@ la rangée N+1, donc les morceaux A et B d'une même lame finissaient systémati
 côte (même veinage, même teinte). `takeExact` et `request` acceptent désormais un ensemble
 `avoid` de `plankNo`, alimenté par les rangées voisines.
 
+### Un calepinage ne doit JAMAIS laisser un trou — règle absolue
+
+Trois manières d'y arriver ont été commises puis corrigées. À ne pas refaire.
+
+1. **Écarter un filet trop large.** Les filets sous `minRipWidth` étaient tous retirés du
+   plan, « puisque la plinthe les couvre ». Vrai pour 3 mm, FAUX pour 2,7 cm : il restait un
+   vide visible contre le mur. On n'écarte plus que ce qui tient dans le **jeu de
+   dilatation** (`max(expansionGap, 1)` cm) ; au-delà la lame est POSÉE et comptée dans
+   `stats.narrowRips`, pour que le poseur sache ce qu'il devra tailler.
+
+2. **S'arrêter au bout du découpage prévu.** La boucle de pose parcourait `bestLens` avec un
+   `for`. Or la simulation raisonne sur une COPIE du stock : à la pose, `request` peut
+   fournir moins (chute plus courte, lot épuisé), le découpage se décale et la plage se
+   terminait AVANT le mur. Trous mesurés jusqu'à 24 × 27 cm contre le mur du fond.
+   → La boucle tourne maintenant **jusqu'à couvrir la plage**, avec un `fallback()` soumis
+   aux mêmes règles que le choix normal (ne pas dépasser, ne pas laisser de reliquat
+   inposable).
+
+3. **Boucher le trou avec un confetti.** Le rattrapage a d'abord produit des morceaux de
+   3,4 cm — aussi inposables que le vide qu'ils comblaient. Deux gardes :
+   - avant de poser, si le reste APRÈS cette lame serait < `minCut`, on **allonge** la lame
+     jusqu'au mur ;
+   - si le stock fournit moins que demandé et que le reliquat tomberait sous `minCut`, on
+     **raccourcit** cette lame pour que la suivante fasse au moins `minCut`.
+
+   Résultat : plus AUCUN morceau sous `minCut` sur les trois plans réels (la plus courte
+   vaut exactement `minCut`), et zéro trou.
+
+**Le banc doit vérifier la COUVERTURE.** `uncoveredM2` a été ajouté, mais il inclut le jeu
+périphérique et reste donc trop grossier pour attraper un trou de 20 cm². Le contrôle qui a
+réellement servi est une **rastérisation à 0,5 cm avec 3 érosions** (ne garde que les vides
+de plus de 3 cm d'épaisseur, donc ni le jeu de dilatation ni les filets de rive). À refaire
+sur les JSON réels après toute modification de la boucle de pose.
+
 ### Seuils — sources vérifiées
 
 | Contrainte | Valeur | Statut |

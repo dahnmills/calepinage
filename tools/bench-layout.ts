@@ -51,6 +51,13 @@ export interface Metrics {
   minPiece: number;
   /** Plus petite largeur après refend (cm) : une bande de 0,7 cm est inposable. */
   minRip: number;
+  /**
+   * Surface du sol NON couverte (m²), hors jeu de dilatation. Doit rester à zéro : un
+   * calepinage qui laisse un vide contre un mur est inutilisable, il faudra improviser au
+   * chantier. Ce garde-fou existe parce que le cas s'est produit — la pose s'arrêtait au
+   * bout du découpage prévu au lieu d'aller jusqu'au mur.
+   */
+  uncoveredM2: number;
 }
 
 type Seg = { x0: number; x1: number; plankNo: number };
@@ -164,6 +171,13 @@ export function measure(room: Room, batches: PlankBatch[], config: LayoutConfig)
     }
   }
 
+  // Couverture : surface des pièces à parqueter moins surface réellement posée. Le jeu
+  // périphérique en fait légitimement partie, on le déduit en tolérant une marge.
+  const toLay = res.spaces
+    .filter((sp: any) => !sp.excluded)
+    .reduce((s: number, sp: any) => s + sp.areaM2, 0);
+  const uncovered = Math.max(0, toLay - res.stats.laidAreaM2);
+
   const lens = res.placed.map((p: any) => p.usedLength).filter((l: number) => l > 0.05);
   const rips = res.placed.map((p: any) => p.usedWidth).filter((w: number) => w > 0.05);
   const sorted = gaps.slice().sort((p, q) => p - q);
@@ -186,6 +200,7 @@ export function measure(room: Room, batches: PlankBatch[], config: LayoutConfig)
     samePlank,
     minPiece: lens.length ? +Math.min(...lens).toFixed(1) : 0,
     minRip: rips.length ? +Math.min(...rips).toFixed(1) : 0,
+    uncoveredM2: +uncovered.toFixed(3),
   };
 }
 
@@ -278,7 +293,7 @@ export function runSuite(full: boolean) {
 if (require.main === module) {
   const full = process.argv.includes('--full');
   const rows = runSuite(full);
-  const cols: (keyof Metrics)[] = ['rows', 'joints', 'viol1Pct', 'flush1', 'bandMax', 'samePlank', 'align2Pct', 'repeat2Pct', 'staircase', 'medGap', 'minPiece', 'minRip', 'wastePct', 'cuts', 'underMinCut'];
+  const cols: (keyof Metrics)[] = ['rows', 'joints', 'viol1Pct', 'flush1', 'bandMax', 'samePlank', 'align2Pct', 'repeat2Pct', 'staircase', 'medGap', 'minPiece', 'minRip', 'uncoveredM2', 'wastePct', 'cuts', 'underMinCut'];
   const head = ['cas'.padEnd(28), ...cols.map((c) => String(c).padStart(10))].join(' ');
   console.log(head); console.log('-'.repeat(head.length));
   for (const r of rows) console.log([r.name.padEnd(28), ...cols.map((c) => String(r[c]).padStart(10))].join(' '));

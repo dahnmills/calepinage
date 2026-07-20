@@ -81,7 +81,7 @@ export function computeLayout(room: Room, batches: PlankBatch[], config: LayoutC
     spaces: [],
     stats: {
       spaces: [], excludedAreaM2: 0, roomAreaM2: 0, laidAreaM2: 0, planksPlaced: 0, newPlanksUsed: 0,
-      offcutsReused: 0, cuts: 0, ripCuts: 0, droppedSlivers: 0, minRipWidth: 0,
+      offcutsReused: 0, cuts: 0, ripCuts: 0, droppedSlivers: 0, narrowRips: 0, minRipWidth: 0,
       missingPlanks: 0, wasteAreaM2: 0, wastePct: 0,
       batchUsage: [], shortage: [],
       perimeterM: 0, doorCount: 0, plintheM: 0, partitionM: 0,
@@ -189,19 +189,37 @@ export function computeLayout(room: Room, batches: PlankBatch[], config: LayoutC
     return Number.isFinite(min) ? max - min : 0;
   };
 
-  // Un filet de quelques millimètres de large ne se pose pas : il casse à la scie, et
-  // aucun poseur ne le taillerait. En bord de pièce il disparaît sous la plinthe et dans le
-  // jeu de dilatation ; ailleurs, l'annoncer sur le plan revient à demander l'impossible.
-  // On l'écarte donc du calepinage plutôt que de le facturer et de le dessiner.
+  // Un filet de quelques MILLIMÈTRES ne se pose pas : il casse à la scie. Mais il ne faut
+  // l'écarter que s'il tient DANS le jeu de dilatation — là, la plinthe le couvre et il
+  // n'existe pas. Au-delà, l'écarter laisse un vrai trou contre le mur : un logiciel de
+  // calepinage n'a pas le droit d'inventer un vide qu'il faudra combler au chantier.
+  // (Erreur commise puis corrigée : un filet de 2,7 cm avait été supprimé, laissant un
+  // écart visible le long du mur.)
   const minRip = Math.max(0, config.minRipWidth ?? 0);
-  const skinny = (pl: (typeof placedCentered)[number]) => {
-    if (minRip <= 0) return false;
+  const sliverMax = Math.max(gap, 1); // jeu périphérique : au-delà, ça se voit
+  const widthOf = (pl: (typeof placedCentered)[number]) => {
     const len = Math.min(pl.length, usedLengthOf(pl));
-    if (len <= 1e-3) return true;
-    const area = pl.pieces.reduce((s, pc) => s + polygonArea(pc), 0);
-    return Math.min(pl.width, area / len) < minRip - 1e-6;
+    if (len <= 1e-3) return 0;
+    return Math.min(pl.width, pl.pieces.reduce((s, pc) => s + polygonArea(pc), 0) / len);
   };
+  const skinny = (pl: (typeof placedCentered)[number]) => widthOf(pl) < sliverMax - 1e-6;
   const droppedSlivers = placedCentered.filter(skinny).length;
+  // Refends plus étroits que le minimum souhaité mais POSÉS quand même : on ne les cache
+  // pas, on les compte, pour que l'utilisateur sache ce qu'il devra tailler.
+  const narrowRips = placedCentered.filter((pl) => {
+    const w = widthOf(pl);
+    return w >= sliverMax - 1e-6 && minRip > 0 && w < minRip - 1e-6;
+  }).length;
+  if ((globalThis as any).__DBG_SLIVERS) {
+    (globalThis as any).__DBG_SLIVERS.push(...placedCentered.filter(skinny).map((pl) => {
+      const xs = pl.rect.map((p) => p.x), ys = pl.rect.map((p) => p.y);
+      const len = Math.min(pl.length, usedLengthOf(pl));
+      const area = pl.pieces.reduce((s2, pc) => s2 + polygonArea(pc), 0);
+      return { x: +Math.min(...xs).toFixed(1), y: +Math.min(...ys).toFixed(1),
+        w: +(Math.max(...xs) - Math.min(...xs)).toFixed(1), h: +(Math.max(...ys) - Math.min(...ys)).toFixed(1),
+        len: +len.toFixed(1), largeur: +(area / Math.max(len, 1e-6)).toFixed(2), aire: +area.toFixed(0) };
+    }));
+  }
 
   const placed: PlacedPlank[] = placedCentered.filter((pl) => !skinny(pl)).map((pl) => {
     const usedLength = Math.min(pl.length, usedLengthOf(pl));
@@ -316,6 +334,7 @@ export function computeLayout(room: Room, batches: PlankBatch[], config: LayoutC
       cuts: inventory.cuts,
       ripCuts,
       droppedSlivers,
+      narrowRips,
       minRipWidth: placed.length
         ? +Math.min(...placed.map((pl) => pl.usedWidth)).toFixed(1) : 0,
       missingPlanks,

@@ -300,6 +300,11 @@ export interface LayoutStats {
    * scier une bande de quelques millimètres — impossible en pratique.
    */
   droppedSlivers: number;
+  /**
+   * Refends plus étroits que `minRipWidth` mais POSÉS quand même : les écarter laisserait
+   * un trou contre le mur. On les signale pour que le poseur sache ce qu'il devra tailler.
+   */
+  narrowRips: number;
   /** Plus petite largeur après refend réellement posée (cm). */
   minRipWidth: number;
   /** Lames posées faute de stock : la pièce est calepinée, mais il faut les acheter. */
