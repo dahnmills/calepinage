@@ -60,7 +60,7 @@ function mergeRuns(pieces: Point[][], gap: number): { start: number; end: number
  */
 export function generateStraight(input: PatternInput): PlacedPlank[] {
   const { clipper, config, inventory, poseWidth, nominalLength, optimizeStart, startLineY } = input;
-  const { jointGap, offsetMode, orientationDeg, seed } = config;
+  const { jointGap, orientationDeg, seed } = config;
 
   // BBox de la pièce dans le repère de pose.
   const allPts = clipper.convex ? clipper.poly : clipper.triangles.flat();
@@ -73,16 +73,14 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
   let idCounter = 0;
   const origin = { x: 0, y: 0 };
 
-  // Centre les coupes de bord le long des lames.
-  const lenSpan = bb.maxX - bb.minX;
-  const lenPhase = optimizeStart ? (nominalLength - (lenSpan % nominalLength)) / 2 : 0;
-
-  const shiftFor = (k: number) => {
-    if (offsetMode === '1/2') return (((k % 2) + 2) % 2) * (nominalLength / 2);
-    if (offsetMode === '1/3') return (((k % 3) + 3) % 3) * (nominalLength / 3);
-    if (offsetMode === 'random') return rand() * nominalLength;
-    return 0;
-  };
+  // `offsetMode` (1/2, 1/3, aléatoire) n'est plus consommé ici. Il décalait le x de départ
+  // de la rangée, mais la rangée se recale sur le bord de la matière : le décalage était
+  // effacé, les trois modes rendaient le même plan (mesuré). Et il n'a pas lieu d'être avec
+  // un stock multi-longueurs : le NF DTU 51.11 pose alors la « coupe perdue » comme mode par
+  // défaut, où le décalage naît des contraintes de joints, pas d'une trame théorique. Le
+  // motif régulier normatif (« coupe de pierre », DTU 51.2 §6d : décalage d'une demi-longueur
+  // à 3 mm près, rangées n et n+2 alignées à 2 mm près) suppose des lames toutes identiques
+  // et reste à implémenter comme un motif à part entière.
 
   // --- Passe 1 : géométrie seule. On établit toutes les cellules et la longueur qu'il
   // faut y poser, sans toucher au stock : l'affectation des lames en dépendra, pas l'inverse.
@@ -94,8 +92,27 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
   // rangée à l'autre. La clé est la position de la rangée : les rangées ne sont pas
   // établies dans l'ordre spatial quand il y a une ligne de départ.
   const jointsByRow = new Map<number, number[]>();
+  /**
+   * Décalage DOMINANT de chaque rangée par rapport à sa voisine précédente. Sert à casser
+   * l'escalier : NWFA proscrit « equal end-joint offsets in sequential rows ». Un
+   * algorithme qui prend systématiquement le premier décalage valide produit un escalier
+   * parfait — techniquement conforme, visuellement inacceptable. C'est le piège classique.
+   */
+  const driftByRow = new Map<number, number>();
   const rowKey = (y: number) => Math.round(y * 10);
   const minOffset = Math.max(0, config.minJointOffset ?? 0);
+  /** Marge anti joint en « H » entre rangées n et n+2 (NWFA). */
+  const H_JOINT_MIN = 10;
+
+  /** Écart SIGNÉ au joint voisin le plus proche : le signe porte le sens de l'escalier. */
+  const signedGapTo = (x: number, l: number, joints: number[]): number => {
+    let best = Infinity, sign = 0;
+    for (const j of joints) {
+      const d = x + l - j;
+      if (Math.abs(d) < Math.abs(best) || best === Infinity) { best = Math.abs(d); sign = d; }
+    }
+    return Number.isFinite(best) ? sign : Infinity;
+  };
 
   /** Écart entre le joint produit par une lame de longueur `l` et le joint voisin le plus proche. */
   const gapTo = (x: number, l: number, joints: number[]): number => {
@@ -120,7 +137,9 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
    * Le reste doit se juger sur `avail` : mesuré sur la cellule, il déclarait posable un
    * reliquat qui, une fois la rangée poursuivie, finissait en bout de 8 cm.
    */
-  const chooseLength = (x: number, room: number, avail: number, near: number[], far: number[]): number => {
+  const chooseLength = (
+    x: number, room: number, avail: number, near: number[], far: number[], prevDrift: number,
+  ): number => {
     // Une lame ne peut pas dépasser la place restante ; et si elle laisse un reste plus
     // court que la coupe minimale, ce reste serait inposable — on l'écarte.
     const stock = inventory.availableLengths(poseWidth).filter((l) => {
@@ -143,10 +162,18 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
       const fault = dNear < minOffset - 1e-6 ? -1000 + dNear * 10 : dNear * 3;
       // Un joint aligné avec celui d'une rangée sur deux dessine un escalier régulier :
       // c'est le défaut qu'on voit le plus sur un plancher, il faut le casser aussi.
-      const stair = dFar < 10 ? -60 + dFar * 4 : Math.min(dFar, enough);
+      const stair = dFar < 10 ? -300 + dFar * 4 : Math.min(dFar, enough);
+      // ESCALIER. Prendre à chaque rangée le même décalage dans le même sens dessine des
+      // marches régulières en travers du plancher : conforme à la règle du décalage
+      // minimal, et pourtant proscrit (NWFA : « avoid blatant stair-steps or equal
+      // end-joint offsets in sequential rows »). On sanctionne donc le décalage qui
+      // REPRODUIT celui de la rangée précédente, signe compris.
+      const drift = signedGapTo(x, l, near);
+      const steps = Number.isFinite(prevDrift) && Number.isFinite(drift)
+        && Math.abs(drift - prevDrift) < 4 && Math.abs(drift) > 5 ? -120 : 0;
       // Un soupçon d'aléa (déterministe : même graine, même plan) départage les longueurs
       // équivalentes. Sans lui, les mêmes choix reviennent et le calepinage se met à rimer.
-      return fault + stair + l * 0.05 + rand() * 4;
+      return fault + stair + steps + l * 0.05 + rand() * 4;
     };
 
     /**
@@ -154,6 +181,9 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
      * AUCUNE longueur acceptable pour la suivante, et la rangée finit avec un joint fautif.
      * On regarde donc un cran plus loin — la lame retenue doit laisser une suite jouable.
      */
+    // Anticipation d'UN cran. Deux crans ont été essayés et mesurés : aucun gain global
+    // (5,6 % → 5,7 % de joints fautifs sur 120 simulations) pour davantage de chute. Le
+    // blocage restant n'est pas là — voir DEV_NOTES.
     const leavesAWay = (l: number): boolean => {
       const rest = avail - l;
       if (rest <= tol) return true; // cette lame ferme la rangée : rien après elle
@@ -178,13 +208,21 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
    * Dernier recours quand aucune lame du stock ne convient : on coupe pour écarter le joint,
    * mais jamais pour gagner trois centimètres — la coupe doit valoir le trait de scie.
    */
-  const fixJoint = (x: number, len: number, maxLen: number, avail: number, neighbours: number[]): number => {
-    if (minOffset <= 0 || neighbours.length === 0) return len;
+  const fixJoint = (
+    x: number, len: number, maxLen: number, avail: number, neighbours: number[], second: number[] = [],
+  ): number => {
+    if (minOffset <= 0 || (neighbours.length === 0 && second.length === 0)) return len;
+    // Joint en « H » : deux joints alignés de part et d'autre d'UNE rangée (n et n+2).
+    // Absent du DTU mais explicitement proscrit par les guidelines NWFA (« avoid H
+    // patterns »), avec ~10 cm de marge. `fixJoint` ne regardait que la voisine immédiate :
+    // dès qu'elle était satisfaite il ne coupait plus, et la rangée reproduisait la n−2.
+    const secondMin = Math.min(minOffset, H_JOINT_MIN);
     // Une lame qui ferme la rangée bute sur le mur : sa fin n'est pas un joint, elle ne
     // gêne personne et n'a aucune raison d'être recoupée.
     const closesRow = (l: number) => avail - l <= tol;
-    const clash = (l: number) => !closesRow(l) && gapTo(x, l, neighbours) < minOffset - 1e-6;
-    if (!clash(len)) return len;
+    const hitsNear = (l: number) => !closesRow(l) && gapTo(x, l, neighbours) < minOffset - 1e-6;
+    const hitsSecond = (l: number) => !closesRow(l) && gapTo(x, l, second) < secondMin - 1e-6;
+    if (!hitsNear(len) && !hitsSecond(len)) return len;
 
     // Chaque joint voisin interdit une plage de ±minOffset autour de lui. On cherche donc
     // la longueur autorisée la PLUS PROCHE de celle qu'on voulait, en testant les bords de
@@ -193,21 +231,27 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
     // ne laissant aucun candidat : la lame restait alors fautive.
     const cand = [len, minCut, maxLen];
     for (const j of neighbours) cand.push(j - minOffset - x, j + minOffset - x);
-    const usable = cand
+    for (const j of second) cand.push(j - secondMin - x, j + secondMin - x);
+    const placeable = cand
       .map((l) => Math.round(l * 10) / 10) // au millimètre : pas de cote biscornue
       .filter((l) => {
-        if (l < minCut - 1e-6 || l > maxLen + 1e-6 || clash(l)) return false;
+        if (l < minCut - 1e-6 || l > maxLen + 1e-6) return false;
         // Le reste doit rester posable, sinon on déplace le problème sur la lame suivante.
         const rest = avail - l;
         return rest <= tol || rest >= minCut;
       })
       .sort((a, b) => Math.abs(a - len) - Math.abs(b - len));
-    return usable[0] ?? len;
+
+    // Deux rangs de priorité, jamais mélangés : la voisine immédiate est une RÈGLE, la
+    // rangée n±2 une PRÉFÉRENCE. Les traiter à égalité faisait sacrifier la première pour
+    // satisfaire la seconde — on cassait l'appareil en brique en créant de vraies fautes.
+    const both = placeable.filter((l) => !hitsNear(l) && !hitsSecond(l));
+    if (both.length) return both[0];
+    const nearOnly = placeable.filter((l) => !hitsNear(l));
+    return nearOnly[0] ?? len;
   };
 
-  const planRow = (rowTop: number, k: number) => {
-    const shift = shiftFor(k);
-    let x = bb.minX - nominalLength + (shift % nominalLength) - lenPhase;
+  const planRow = (rowTop: number) => {
     const rowBottom = Math.min(rowTop + poseWidth, bb.maxY);
     // Rangées voisines immédiates (contrainte dure) et suivantes (simple préférence) :
     // des joints alignés à deux rangées d'écart se voient encore, en escalier.
@@ -220,48 +264,47 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
       ...(jointsByRow.get(rowKey(rowTop + 2 * rowStep)) ?? []),
     ];
     const joints: number[] = [];
+    const drifts: number[] = [];
+    const prevDrift = driftByRow.get(rowKey(rowTop - rowStep)) ?? Infinity;
 
-    let guard = 0;
-    while (x < bb.maxX && guard++ < 5000) {
-      const cellLen = nominalLength;
-      const rect: Point[] = [
-        { x, y: rowTop }, { x: x + cellLen, y: rowTop },
-        { x: x + cellLen, y: rowBottom }, { x, y: rowBottom },
-      ];
-      const pieces = clipRectToRoom(rect, clipper);
-      if (pieces.length === 0) { x += cellLen + jointGap; continue; }
+    // Plages de matière CONTINUE de la rangée ENTIÈRE, calculées une fois.
+    //
+    // Elles étaient calculées case par case (une case = une longueur nominale) : `run.end`
+    // ne dépassait donc jamais le bout de la CASE, et `rowMaxX` — censé être le mur du
+    // fond — valait la fin de la case courante. Or un joint n'était enregistré que si
+    // `endX < rowMaxX`, condition FAUSSE pour toute lame qui remplissait sa case. Aucun
+    // joint n'était donc mémorisé, `near` restait vide, et la contrainte de décalage ne
+    // s'appliquait jamais : avec un stock uniforme, toutes les rangées sortaient
+    // identiques. C'est la cause racine des joints alignés.
+    const band: Point[] = [
+      { x: bb.minX, y: rowTop }, { x: bb.maxX, y: rowTop },
+      { x: bb.maxX, y: rowBottom }, { x: bb.minX, y: rowBottom },
+    ];
+    const runs = mergeRuns(clipRectToRoom(band, clipper), jointGap);
 
-      // Segments de matière CONTINUE dans la case, le long du grain. Une cloison (ou une
-      // zone exclue) coupe la rangée : elle produit un trou. Une lame ne peut pas l'enjamber
-      // — elle est coupée à la cloison, et une autre reprend de l'autre côté.
-      const runs = mergeRuns(pieces, jointGap);
-      const run = runs.find((r) => r.end > x + 1e-6);
-      if (!run) { x += cellLen + jointGap; continue; }
-      if (run.start > x + 1e-6) { x = run.start; continue; } // on démarre où la matière reprend
+    for (let ri = 0; ri < runs.length; ri++) {
+      const run = runs[ri];
+      let x = run.start;
+      let guard = 0;
+      while (x < run.end - 1e-3 && guard++ < 5000) {
+      const avail = run.end - x; // matière continue restante jusqu'au bout de la plage
+      const stockLens = inventory.availableLengths(poseWidth);
+      const longest = stockLens.length ? Math.max(...stockLens) : nominalLength;
+      const room = Math.min(avail, longest); // plus longue lame réellement posable ici
 
-      const avail = Math.max(0, run.end - x); // matière continue restante dans la plage
-      const room = Math.min(cellLen, avail); // ce qui tient dans la cellule courante
-      if (room < 1e-3) { x += cellLen + jointGap; continue; }
-      // La lame bute-t-elle sur une cloison (trou après) plutôt que sur le mur du fond ?
-      const atCloison = run.end < bb.maxX - tol && runs.some((r) => r.start > run.end + tol);
-
-      // On sort du stock la lame qu'on va POSER, tout de suite : la géométrie suit la lame
-      // obtenue, et non l'inverse. Planifier d'abord puis affecter ensuite faisait diverger
-      // les deux — joints imprévus, cases mal comblées, chutes de 9 cm.
-      const rowMaxX = runs[runs.length - 1].end; // bout de matière de la rangée (mur du fond)
-      const pick = chooseLength(x, room, avail, near, far);
+      const pick = chooseLength(x, room, avail, near, far, prevDrift);
       // `chooseLength` ne peut proposer que des longueurs EXISTANTES. Quand le stock est
       // à longueurs rondes (40…160), les joints retombent tous sur la même trame et il
       // arrive qu'AUCUNE lame entière ne respecte le décalage minimal. Il faut alors
       // couper — c'est ce que fait le poseur. `fixJoint` était placé derrière le `??`,
       // donc appelé seulement quand la lame entière manquait : exactement le cas où on
       // n'en avait pas besoin. Résultat : des joints alignés d'une rangée à l'autre.
-      const want = fixJoint(x, Math.min(pick, room), room, avail, near);
+      const want = fixJoint(x, Math.min(pick, room), room, avail, near, far);
       const cut = (Math.abs(want - pick) <= 1e-6 ? inventory.takeExact(pick, poseWidth) : null)
         ?? inventory.request(want, poseWidth);
 
-      const placedLen = Math.min(room, cut.provided);
-      if (placedLen <= 1e-3) { x += cellLen + jointGap; continue; }
+      const placedLen = Math.min(avail, cut.provided);
+      if (placedLen <= 1e-3) break;
 
       const placedRect: Point[] = [
         { x, y: rowTop }, { x: x + placedLen, y: rowTop },
@@ -269,8 +312,10 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
       ];
       // Toujours reclipper : la lame est bornée à la matière continue, jamais à travers un trou.
       const placedPieces = clipRectToRoom(placedRect, clipper);
-      // Coupée si raccourcie, OU si elle vient buter contre une cloison (bord de coupe franc).
-      const hitsCloison = atCloison && placedLen >= room - tol;
+      // Ferme-t-elle la plage ? Si oui et qu'une autre plage suit, elle bute sur une
+      // cloison : bord de coupe franc, et c'est un joint que les voisines doivent éviter.
+      const closesRun = x + placedLen >= run.end - tol;
+      const hitsCloison = closesRun && ri < runs.length - 1;
 
       if (placedPieces.length > 0) {
         planks.push({
@@ -301,21 +346,30 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
       }
 
       const endX = x + placedLen;
-      // Contre une cloison : la lame suivante reprend de l'autre côté du trou.
-      x = hitsCloison ? (runs.find((r) => r.start > endX + tol)?.start ?? endX + jointGap) : endX + jointGap;
-      // Fin de lame = joint, sauf contre le mur du fond de la rangée. La coupe contre une
-      // cloison est un joint à part entière : les rangées voisines doivent l'éviter.
-      if (endX < rowMaxX - tol) joints.push(endX);
+      // Fin de lame = joint, SAUF quand elle ferme la plage : là, elle bute sur un mur ou
+      // sur une cloison, la fibre s'arrête et rien ne se raccorde.
+      if (!closesRun) {
+        joints.push(endX);
+        const d = signedGapTo(x, placedLen, near);
+        if (Number.isFinite(d)) drifts.push(d);
+      }
+      x = endX + jointGap;
+      }
     }
 
     jointsByRow.set(rowKey(rowTop), joints);
+    // Décalage dominant = médiane : une valeur isolée ne doit pas passer pour la tendance.
+    if (drifts.length) {
+      const sorted = drifts.slice().sort((a, b) => a - b);
+      driftByRow.set(rowKey(rowTop), sorted[sorted.length >> 1]);
+    }
   };
 
   if (startLineY != null) {
     // Ligne de départ : rangées des deux côtés. L'ordre = ordre de pose (numérotation
     // radiale). `startFlip` choisit par quel côté on commence.
-    const down = () => { let k = 0; for (let y = startLineY; y < bb.maxY; y += rowStep, k++) planRow(y, k); };
-    const up = () => { let k = 1; for (let y = startLineY - rowStep; y + poseWidth > bb.minY; y -= rowStep, k++) planRow(y, -k); };
+    const down = () => { for (let y = startLineY; y < bb.maxY; y += rowStep) planRow(y); };
+    const up = () => { for (let y = startLineY - rowStep; y + poseWidth > bb.minY; y -= rowStep) planRow(y); };
     if (config.startFlip) { up(); down(); } else { down(); up(); }
   } else {
     // Rive équilibrée (haut/bas de largeur égale).
@@ -326,8 +380,7 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
       const rem = span - nFull * rowStep;
       if (rem > 1e-3 && nFull >= 1) startY = bb.minY - (rowStep - (rowStep + rem) / 2);
     }
-    let k = 0;
-    for (let y = startY; y < bb.maxY; y += rowStep, k++) planRow(y, k);
+    for (let y = startY; y < bb.maxY; y += rowStep) planRow(y);
   }
 
   return planks;

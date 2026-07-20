@@ -52,40 +52,103 @@ Helper `dedupePoints` (`src/model/geometry.ts`), appliqué :
 
 ## Calepinage — décalage des joints
 
-`fixJoint` (couper pour écarter un joint) était placé DERRIÈRE le `??` :
+### Banc de mesure — `tools/bench-layout.ts`
 
-    inventory.takeExact(pick) ?? inventory.request(fixJoint(...))
+    npx esbuild tools/bench-layout.ts --bundle --platform=node --format=cjs \
+      --outfile=_b.cjs && node _b.cjs --full   # 120 simulations
 
-donc appelé seulement quand la lame entière manquait — exactement le cas où on n'en avait
-pas besoin. Or `chooseLength` ne propose que des longueurs EXISTANTES : avec un stock à
-longueurs rondes (40…160), les joints retombent tous sur la même trame et il arrive
-qu'AUCUNE lame entière ne respecte `minJointOffset`. Il faut alors couper.
-→ `fixJoint` est calculé AVANT, et décide s'il faut prendre une lame entière ou couper.
+**Ne jamais toucher à l'algorithme sans passer ce banc avant/après.** Un calepinage
+CONFORME n'est pas forcément BEAU : le banc mesure donc les deux.
 
-`fixJoint` ne testait que « pile à ±minOffset d'un joint voisin ». Ces points tombent
-souvent dans la plage interdite d'un AUTRE joint → aucun candidat → lame fautive laissée
-telle quelle. Il teste maintenant aussi `len`, `minCut` et `maxLen`.
+| Métrique | Ce qu'elle attrape |
+|---|---|
+| `viol1Pct` | joints sous le décalage minimal vs rangée voisine — la règle dure |
+| `flush1` | joints à moins d'1 cm de la voisine — alignement franc |
+| `align2Pct` | joints alignés avec la rangée n±2 — **joint en « H »** (NWFA) |
+| `repeat2Pct` | rangée qui reproduit la n−2 → **périodicité**, l'appareil « en brique » |
+| `staircase` | ≥3 rangées dont les joints dérivent d'un pas constant → **effet escalier** |
+| `medGap` | écart médian au joint voisin : plus haut = plus aéré |
+| `wastePct`, `cuts`, `underMinCut` | le coût matière de tout ça |
 
-`room` (cellule, plafonnée à la nominale) et `avail` (matière continue restante) sont
-désormais distincts : juger le reste sur la cellule déclarait posable un reliquat qui
-finissait en bout de 8 cm.
+### La cause racine : `near` était TOUJOURS VIDE
 
-**Mesuré sur `calepinage-2026-07-20 (3).json` :** joints fautifs (< 30 cm) 41,9 % → 11,9 %.
-Contrepartie : chute 3,0 % → 4,3 %, coupes 63 → 83. Casser des joints alignés avec un
-stock à longueurs rondes SUPPOSE de couper — c'est un arbitrage, pas un défaut.
+Les plages de matière étaient calculées **case par case** (une case = une longueur
+nominale). `run.end` ne dépassait donc jamais le bout de la CASE, et `rowMaxX` — censé
+être le mur du fond — valait la fin de la case courante. Or un joint n'était enregistré
+que si `endX < rowMaxX` : condition FAUSSE pour toute lame remplissant sa case. **Aucun
+joint n'était mémorisé, `jointsByRow` restait vide, la contrainte de décalage ne
+s'appliquait jamais.** Avec un stock uniforme, toutes les rangées sortaient identiques.
 
-### `offsetMode` (1/2, 1/3, aléatoire) est quasi inopérant — connu
+→ `planRow` clippe désormais la rangée ENTIÈRE (`band` de `bb.minX` à `bb.maxX`) une seule
+fois. Un joint = une fin de lame qui ne ferme pas sa plage.
 
-`shiftFor(k)` décale le `x` de départ de la rangée, mais la boucle fait
-`if (run.start > x) { x = run.start; continue; }` : la rangée se recale sur le bord de la
-matière et le décalage est perdu. 1/2, 1/3 et « aucun » rendent le même plan.
+### Les autres correctifs, tous validés au banc
 
-Tentative de correction (première lame ramenée sur la trame décalée) : `offsetMode`
-redevient visible, MAIS les joints fautifs remontent à ~23 % et les bouts sous `minCut`
-passent de 13 à 18. Abandonné — la qualité des joints prime. Le vrai moteur du décalage
-est `chooseLength`/`fixJoint`, pas une trame théorique. À trancher avec l'utilisateur :
-soit rendre `offsetMode` impératif (et perdre en qualité de joints), soit retirer/renommer
-le réglage.
+- `fixJoint` était derrière le `??` : appelé seulement quand la lame entière manquait,
+  c.-à-d. jamais quand il fallait couper. Calculé avant, il décide entre lame et coupe.
+- `fixJoint` ne testait que « pile à ±minOffset d'un joint » ; ces points tombent souvent
+  dans la plage interdite d'un AUTRE joint → aucun candidat. Il teste aussi `len`,
+  `minCut`, `maxLen`.
+- `fixJoint` reçoit la rangée n±2 (`far`) : sans elle, dès la voisine satisfaite il ne
+  coupait plus et la rangée reproduisait la n−2. **Deux rangs de priorité, jamais
+  mélangés** : n±1 est une RÈGLE, n±2 une PRÉFÉRENCE. Les traiter à égalité faisait
+  sacrifier la première (viol1 remontait à 14,5 %).
+- Terme **anti-escalier** dans `score` : pénalise le décalage qui reproduit celui de la
+  rangée précédente, signe compris (`driftByRow`, médiane par rangée).
+- `room` (cellule) et `avail` (matière continue restante) séparés.
+
+Poids réglés par **balayage de 30 configurations × 12 simulations**, pas à la main :
+`H_JOINT_MIN = 10` (valeur NWFA — elle gagne aussi empiriquement), pénalité escalier
+−120, pénalité n±2 −300.
+
+### Résultat mesuré — 120 simulations
+
+| | avant | après |
+|---|---|---|
+| joints fautifs | **52,0 %** | **5,6 %** |
+| joints collés (<1 cm) | 77,9 | 2,3 |
+| joints en « H » (n±2) | 52,2 % | 7,9 % |
+| rangées périodiques | 43,5 % | 0,5 % |
+| écart médian | 21,9 cm | 39,3 cm |
+| chute perdue | 3,1 % | 3,7 % |
+| coupes | 40,5 | 70,8 |
+| bouts sous `minCut` | 3,4 | 1,9 |
+
+Casser des joints alignés avec un stock à longueurs rondes SUPPOSE de couper : la hausse
+des coupes est l'arbitrage, pas un effet de bord.
+
+### Essayé, mesuré, ABANDONNÉ
+
+- **Anticipation à 2 crans** dans `leavesAWay` : 5,6 % → 5,7 %, et plus de chute. Inutile.
+- **Ramener la 1ᵉʳᵉ lame sur une trame décalée** (pour faire vivre `offsetMode`) : les
+  joints fautifs remontaient à ~23 % et les bouts sous `minCut` de 13 à 18.
+
+### Ce qui RESTE ouvert
+
+- **Plans réels à ~25 % de fautes** alors que les pièces simples sont à 0–1 %. Localisé :
+  les plages d'environ 250 cm (couloir entre deux cloisons) concentrent 55 % des fautes.
+  Le glouton s'y piège sans recours. La suite serait une **recherche locale par rangée**
+  (planifier la plage K fois, garder la meilleure) — bloquée par le fait que `Inventory`
+  est à état : il faut pouvoir planifier sans consommer le stock.
+- **`offsetMode` n'est plus branché du tout** (le code mort est retiré). Le réglage existe
+  toujours dans l'UI et ne fait rien. À trancher, voir ci-dessous.
+
+### Règles de l'art — sources
+
+- **NF DTU 51.2 §6e / 51.11 §5.2 (coupe perdue)** : décalage ≥ **2 × la LARGEUR de lame**,
+  et non une constante. Pour 12 cm de large → 24 cm. Plancher de 10 cm si le stock
+  contient des lames < 40 cm. → `minJointOffset` devrait avoir pour défaut
+  `max(2 × largeur, 30)` et non 30 en dur.
+- **NWFA** (guidelines 2025) converge sur la même formule `2 × largeur`, et proscrit
+  explicitement les joints en « H » et les « equal end-joint offsets in sequential rows ».
+- **Quick-Step / Pergo** : ≥ 30 cm, plus exigeant que le DTU. La notice fabricant prime
+  (garantie) → garder 30 cm comme plancher par défaut est défendable.
+- **DTU 51.11** : avec un stock multi-longueurs, la pose par défaut est la **coupe
+  perdue** — un motif régulier au tiers n'a alors aucune base. Le **1/2 (« coupe de
+  pierre », DTU 51.2 §6d)** est lui normatif : décalage d'une demi-longueur à 3 mm près,
+  rangées n et n+2 alignées à 2 mm près. Il suppose des lames toutes identiques.
+- Aucune valeur normative française pour la longueur minimale de lame ; Pergo impose 8"
+  (≈ 20 cm). Le « 30 cm » courant est un usage — ne pas l'afficher comme normatif.
 
 ---
 
