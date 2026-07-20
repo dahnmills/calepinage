@@ -1,7 +1,8 @@
 import { useStore } from '../store/useStore';
 import { PATTERNS } from '../model/patterns';
+import { flattenPacks } from '../model/stock';
+import { dominantWidth } from '../model/layout';
 import NumberField from './NumberField';
-import type { OffsetMode } from '../model/types';
 
 /** Angle (mod 180) de la plus longue arête de la pièce : sens de pose "dans la longueur". */
 function longestEdgeAngle(points: { x: number; y: number }[]): number {
@@ -14,15 +15,13 @@ function longestEdgeAngle(points: { x: number; y: number }[]): number {
   return ((best % 180) + 180) % 180;
 }
 
-const OFFSETS: { id: OffsetMode; label: string }[] = [
-  { id: '0', label: 'Aligné (0)' },
-  { id: '1/2', label: 'Demi (1/2)' },
-  { id: '1/3', label: 'Tiers (1/3)' },
-  { id: 'random', label: 'Aléatoire' },
-];
-
 export default function ConfigPanel() {
-  const { config, setConfig, room } = useStore();
+  const { config, setConfig, room, packs } = useStore();
+
+  // Décalage conseillé = 2 × la largeur de lame (NF DTU 51.2 §6e et guidelines NWFA
+  // convergent sur cette formule ; ce n'est pas une constante en centimètres).
+  const width = dominantWidth(flattenPacks(packs));
+  const advised = width > 0 ? Math.round(2 * width) : 0;
 
   return (
     <section className="panel">
@@ -40,17 +39,13 @@ export default function ConfigPanel() {
         </select>
       </label>
 
-      <label className="field">
-        <span>Décalage rangées</span>
-        <select
-          value={config.offsetMode}
-          onChange={(e) => setConfig({ offsetMode: e.target.value as OffsetMode })}
-        >
-          {OFFSETS.map((o) => (
-            <option key={o.id} value={o.id}>{o.label}</option>
-          ))}
-        </select>
-      </label>
+      {/*
+        Le sélecteur « Décalage rangées » (1/2, tiers, aléatoire) a été retiré : mesuré,
+        les trois modes rendaient un plan RIGOUREUSEMENT identique. Un motif régulier n'a
+        de sens qu'avec des lames toutes de même longueur ; avec un stock multi-longueurs,
+        le NF DTU 51.11 impose la « coupe perdue », où le décalage naît des contraintes de
+        joints ci-dessous — ce sont elles les vrais réglages.
+      */}
 
       <label className="field">
         <span>Orientation : {config.orientationDeg}°</span>
@@ -100,9 +95,19 @@ export default function ConfigPanel() {
         <span>Décalage mini des joints (cm)</span>
         <NumberField
           min={0} step={1} value={config.minJointOffset} onChange={(v) => setConfig({ minJointOffset: v })}
-          title="Écart minimal entre les joints de deux rangées voisines. Des joints alignés sont laids et affaiblissent le plancher : 30 cm est l'usage."
+          title="Écart minimal entre les joints de deux rangées voisines. Le NF DTU 51.2 et les guidelines NWFA demandent 2 × la largeur de lame ; les notices fabricants (Quick-Step, Pergo) 30 cm. Viser trop haut est contre-productif : là où c'est infaisable, le plan produit des joints franchement collés."
         />
       </label>
+      {advised > 0 && config.minJointOffset > advised && (
+        <p className="field-hint">
+          Conseil : <b>{advised} cm</b> (2 × la largeur de lame, NF DTU 51.2 / NWFA).
+          Au-delà, le décalage peut devenir infaisable par endroits — et un seuil
+          inatteignable produit des joints collés, pas un plancher plus propre.{' '}
+          <button type="button" className="link-btn" onClick={() => setConfig({ minJointOffset: advised })}>
+            utiliser {advised} cm
+          </button>
+        </p>
+      )}
 
       <label className="field">
         <span>Longueur mini de coupe (cm)</span>
@@ -163,12 +168,13 @@ export default function ConfigPanel() {
         <span>Réutiliser les chutes</span>
       </label>
 
-      {config.offsetMode === 'random' && (
-        <label className="field">
-          <span>Graine (aléatoire)</span>
-          <NumberField min={0} step={1} value={config.seed} onChange={(v) => setConfig({ seed: Math.round(v) })} />
-        </label>
-      )}
+      <label className="field">
+        <span>Graine (variante)</span>
+        <NumberField
+          min={0} step={1} value={config.seed} onChange={(v) => setConfig({ seed: Math.round(v) })}
+          title="Change la graine pour obtenir une autre disposition à réglages identiques. Même graine = même plan."
+        />
+      </label>
     </section>
   );
 }

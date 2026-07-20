@@ -180,17 +180,48 @@ chacun ±30 cm, soit 240 cm d'exclusion sur 304 cm utiles. La contrainte est sur
 pour ce stock : c'est le réglage (24 cm) ou le stock (lames plus longues) qu'il faut
 corriger, pas l'algorithme.
 
+### Réparation ciblée des joints collés
+
+Quand un joint reste trop près de la rangée voisine, relancer des tirages au hasard ne sert
+à rien : ils cherchent partout sauf là où ça coince. `repairRun` déplace CE joint en
+rééquilibrant les deux lames qui l'encadrent — la longueur totale des deux est conservée,
+donc rien en amont ni en aval n'est touché.
+
+Deux garde-fous, tous deux issus de la mesure :
+- **Ne réparer QUE sous `REPAIR_BELOW = 6` cm.** Réparer aussi les joints juste sous la
+  règle dégrade l'ensemble (5 % → 10 % de joints sous la cible) : le déplacement modifie la
+  lame suivante, donc les joints que la rangée d'après devra éviter.
+- **N'accepter la réparation que si elle n'aggrave rien** (`violations <=` ET `minGap >`).
+
+Balayage sur 720 simulations : joints collés **1,87 → 0,33** (−82 %) pour +0,16 point de
+joints sous la cible, sans chute ni coupe supplémentaire.
+
+`RUN_ATTEMPTS_HARD = 60` : effort supplémentaire uniquement sur les plages où la contrainte
+ne passe pas du premier coup.
+
+### État mesuré — 120 simulations
+
+| | avant tout | maintenant |
+|---|---|---|
+| joints fautifs | 52,0 % | **5,2 %** |
+| joints collés | 77,9 | **0,3** |
+| joints en « H » (n±2) | 52,2 % | **6,6 %** |
+| rangées périodiques | 43,5 % | **0,2 %** |
+| lames sous `minCut` | 3,4 | **0** |
+| écart médian | 21,9 cm | **40 cm** |
+| chute perdue | 3,1 % | 3,4 % |
+
+### Restitution à l'utilisateur
+
+`LayoutStats.stagger` (calculé dans `staggerStats`, `layout.ts` — vrai pour n'importe quel
+motif) : écart minimal, médian, nombre de joints sous la cible, et la valeur conseillée
+`2 × largeur de lame`. Affiché dans le panneau Résultats, en alerte si le minimum passe
+sous 6 cm. **Un plan silencieusement dégradé est pire qu'un plan qui annonce ce qu'il
+tient** : le décalage demandé n'est pas toujours atteignable, l'utilisateur doit le savoir.
+
+Le `ConfigPanel` propose la valeur DTU en un clic quand le réglage la dépasse.
+
 ### Ce qui RESTE ouvert
-
-
-- **Plans réels à ~25 % de fautes** alors que les pièces simples sont à 0–1 %. Localisé :
-  les plages d'environ 250 cm (couloir entre deux cloisons) concentrent 55 % des fautes.
-  Le glouton s'y piège sans recours. La suite serait une **recherche locale par rangée**
-  (planifier la plage K fois, garder la meilleure) — bloquée par le fait que `Inventory`
-  est à état : il faut pouvoir planifier sans consommer le stock.
-- **`offsetMode` n'est plus branché du tout** (le code mort est retiré). Le réglage existe
-  toujours dans l'UI et ne fait rien. À trancher, voir ci-dessous.
-
 ### Règles de l'art — sources
 
 - **NF DTU 51.2 §6e / 51.11 §5.2 (coupe perdue)** : décalage ≥ **2 × la LARGEUR de lame**,

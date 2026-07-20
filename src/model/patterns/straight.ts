@@ -104,6 +104,10 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
   const H_JOINT_MIN = 10;
   /** Découpages tirés au sort par plage avant d'en retenir un. Réglé au banc de mesure. */
   const RUN_ATTEMPTS = 12;
+  /** Essais supplémentaires sur une plage où la contrainte ne passe pas du premier coup. */
+  const RUN_ATTEMPTS_HARD = 60;
+  /** En deçà de cet écart, deux joints se lisent comme « côte à côte » : on répare. */
+  const REPAIR_BELOW = 6; // retenu au banc : −82 % de joints collés pour +0,2 pt de fautes
   /**
    * Coût d'un joint de plus dans une plage. Moins de joints = décalage plus facile à tenir
    * ET rendu plus calme. Valeur retenue au banc (600 simulations) : meilleure sur tous les
@@ -330,6 +334,46 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
     return out;
   };
 
+  /**
+   * RÉPARATION CIBLÉE d'une plage. Quand un joint reste trop près de la rangée voisine, on
+   * ne retire pas au sort : on déplace CE joint, en rééquilibrant les deux lames qui
+   * l'encadrent, vers la position qui maximise l'écart. Les tirages aléatoires laissaient
+   * un joint à 0 cm là où un écart de 15 cm existait — parce qu'ils cherchaient partout au
+   * lieu de corriger le point précis qui pose problème.
+   */
+  const repairRun = (
+    runStart: number, runEnd: number, lens: number[], near: number[], off: number,
+  ): number[] => {
+    if (!near.length || lens.length < 2) return lens;
+    const out = lens.slice();
+    let x = runStart;
+    for (let i = 0; i < out.length - 1; i++) {
+      const jointX = x + out[i];
+      // Une lame qui ferme la plage bute sur un mur : sa fin n'est pas un joint.
+      if (runEnd - jointX <= tol) { x += out[i] + jointGap; continue; }
+      // On ne répare QUE les joints vraiment collés. Corriger aussi ceux qui sont juste
+      // sous la règle a été mesuré : le déplacement modifie la lame suivante, donc les
+      // joints que la rangée d'après devra éviter, et l'ensemble se dégrade (5 % → 10 %
+      // de joints sous la cible). Ici on ne vise que le défaut visible à l'œil.
+      if (gapTo(x, out[i], near) >= REPAIR_BELOW - 1e-6) { x += out[i] + jointGap; continue; }
+
+      // Les deux lames encadrantes couvrent une longueur fixe : on ne déplace QUE leur
+      // frontière, donc rien en amont ni en aval n'est touché.
+      const span = out[i] + jointGap + out[i + 1];
+      let bestLen = out[i];
+      let bestGap = gapTo(x, out[i], near);
+      for (let c = minCut; c <= span - jointGap - minCut + 1e-6; c += 0.5) {
+        const g = gapTo(x, c, near);
+        if (g > bestGap + 1e-6) { bestGap = g; bestLen = Math.round(c * 10) / 10; }
+        if (bestGap >= off) break; // inutile de chercher au-delà de la règle
+      }
+      out[i] = bestLen;
+      out[i + 1] = span - jointGap - bestLen;
+      x += out[i] + jointGap;
+    }
+    return out;
+  };
+
   /** Note une plage découpée : plus c'est haut, meilleur c'est. */
   const scoreRun = (
     runStart: number, runEnd: number, lens: number[], near: number[], far: number[],
@@ -428,7 +472,13 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
       let bestViol = Infinity;
       let bestGap = -Infinity;
       let bestScore = -Infinity;
-      for (let attempt = 0; attempt < RUN_ATTEMPTS; attempt++) {
+      // Effort ADAPTATIF : 12 essais suffisent partout où la contrainte passe. Là où elle
+      // coince, ils ne suffisent pas — et c'est exactement là que ça compte, car le plan
+      // se rabattait alors sur un joint à 0 cm quand un joint à 15 existait. On insiste
+      // donc uniquement sur les plages difficiles ; ailleurs on s'arrête tôt.
+      let attempts = RUN_ATTEMPTS;
+      for (let attempt = 0; attempt < attempts; attempt++) {
+        if (attempt === RUN_ATTEMPTS - 1 && bestViol > 0) attempts = RUN_ATTEMPTS_HARD;
         // Graine dérivée de la position : même plan pour la même graine de projet.
         const draw = mulberry32(seed + rowKey(rowTop) * 131 + ri * 17 + attempt * 7919);
         const lens = planRun(run.start, run.end, near, far, prevDrift, draw, minOffset);
@@ -444,6 +494,20 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
         }
       }
       if (!bestLens.length) continue;
+      if (bestGap < REPAIR_BELOW) {
+        // Il reste des joints trop proches : on les déplace un par un plutôt que de
+        // relancer des tirages, qui cherchent partout sauf là où ça coince.
+        const fixed = repairRun(run.start, run.end, bestLens, near, minOffset);
+        const r = scoreRun(
+          run.start, run.end, fixed, near, far, prevDrift, offcuts.has(fixed[0]), minOffset,
+        );
+        // On n'accepte la réparation que si elle N'AGGRAVE RIEN : déplacer un joint change
+        // la lame suivante, donc le joint suivant. Sans cette garde, on supprimait un joint
+        // collé en en créant deux autres juste sous la règle.
+        if (r.violations <= bestViol && r.minGap > bestGap + 1e-6) {
+          bestLens = fixed; bestViol = r.violations; bestGap = r.minGap;
+        }
+      }
       if (Number.isFinite(bestGap) && bestGap > 0) achievedGaps.push(bestGap);
 
       let x = run.start;

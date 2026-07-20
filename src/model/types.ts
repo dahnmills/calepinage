@@ -294,6 +294,24 @@ export interface LayoutStats {
   plintheM: number;
   /** Longueur totale de cloisons (m). */
   partitionM: number;
+  /**
+   * Qualité du décalage des joints RÉELLEMENT obtenue. Le décalage demandé n'est pas
+   * toujours atteignable — un stock de lames courtes dans une grande pièce donne 4 joints
+   * par rangée, et 4 joints voisins qui s'interdisent chacun ±30 cm saturent la rangée.
+   * Le plan reste posable, mais l'utilisateur doit savoir ce qu'il obtient vraiment.
+   */
+  stagger: {
+    /** Écart minimal constaté entre deux joints de rangées voisines (cm). */
+    min: number;
+    /** Écart médian (cm). */
+    median: number;
+    /** Nombre de joints sous le décalage demandé, et total de joints comparés. */
+    below: number;
+    total: number;
+    /** Décalage demandé (cm) et valeur conseillée = 2 × largeur de lame (NF DTU 51.2, NWFA). */
+    target: number;
+    recommended: number;
+  };
 }
 
 /**

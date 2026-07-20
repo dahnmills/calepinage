@@ -30,6 +30,27 @@ export default function ResultsPanel() {
         </div>
       )}
 
+      {stats.stagger.total > 0 && (
+        <div className={stats.stagger.min < 6 ? 'alert' : 'note'}>
+          <b>Décalage des joints obtenu</b> — minimum <b>{stats.stagger.min} cm</b>,
+          médiane {stats.stagger.median} cm, sur {stats.stagger.total} joints.
+          {stats.stagger.below > 0 && (
+            <>
+              {' '}<b>{stats.stagger.below}</b> joint(s) sous les {stats.stagger.target} cm demandés.
+            </>
+          )}
+          {stats.stagger.below > stats.stagger.total * 0.15 && stats.stagger.recommended > 0
+            && stats.stagger.target > stats.stagger.recommended && (
+            <>
+              {' '}Ce seuil est hors d'atteinte avec ce stock : viser trop haut ne rend pas le
+              plancher plus propre, cela déplace le problème sur quelques joints franchement
+              collés. Le NF DTU 51.2 demande <b>{stats.stagger.recommended} cm</b>
+              {' '}(2 × la largeur de lame) — abaisser le réglage donnera un meilleur résultat réel.
+            </>
+          )}
+        </div>
+      )}
+
       {stats.spaces.length > 1 && (
         <>
           <h3>Pièces ({stats.spaces.length})</h3>

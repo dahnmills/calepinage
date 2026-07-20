@@ -24,6 +24,56 @@ function nominalLength(batches: PlankBatch[], width: number): number {
   return same.reduce((m, b) => Math.max(m, b.length), 0) || 120;
 }
 
+/**
+ * Décalage des joints RÉELLEMENT obtenu, relevé sur les lames posées.
+ *
+ * Mesuré ici plutôt que dans le motif : c'est vrai pour n'importe quel motif, et c'est
+ * l'information dont l'utilisateur a besoin — le décalage demandé n'est pas toujours
+ * atteignable (stock de lames courtes = beaucoup de joints par rangée), et un plan
+ * silencieusement dégradé est pire qu'un plan qui annonce ce qu'il tient.
+ */
+function staggerStats(placed: PlacedPlank[], orientationDeg: number, target: number, width: number) {
+  const a = (-orientationDeg * Math.PI) / 180;
+  const un = (p: Point) => ({ x: p.x * Math.cos(a) - p.y * Math.sin(a), y: p.x * Math.sin(a) + p.y * Math.cos(a) });
+  const rows = new Map<string, { x0: number; x1: number }[]>();
+  for (const pl of placed) {
+    const r = pl.rect.map(un);
+    const ys = r.map((p) => p.y), xs = r.map((p) => p.x);
+    const key = `${pl.spaceIndex}|${(Math.round(Math.min(...ys) * 10) / 10).toFixed(1)}`;
+    if (!rows.has(key)) rows.set(key, []);
+    rows.get(key)!.push({ x0: Math.min(...xs), x1: Math.max(...xs) });
+  }
+  const keys = [...rows.keys()].sort((k1, k2) => {
+    const [s1, y1] = k1.split('|'), [s2, y2] = k2.split('|');
+    return s1 === s2 ? parseFloat(y1) - parseFloat(y2) : +s1 - +s2;
+  });
+  // Une fin de lame n'est un JOINT que si une autre lame reprend juste après : contre un
+  // mur ou une cloison, la matière s'arrête, rien ne se raccorde.
+  const jointsOf = (segs: { x0: number; x1: number }[]) =>
+    segs.filter((s) => segs.some((o) => o !== s && Math.abs(o.x0 - s.x1) < 1.5)).map((s) => s.x1);
+
+  const gaps: number[] = [];
+  for (let i = 1; i < keys.length; i++) {
+    const [sp, y] = keys[i].split('|'), [ps, py] = keys[i - 1].split('|');
+    // Rangées d'une même pièce et réellement contiguës, sinon la comparaison n'a pas de sens.
+    if (sp !== ps || Math.abs(parseFloat(y) - parseFloat(py)) > width + 0.6) continue;
+    const prev = jointsOf(rows.get(keys[i - 1])!);
+    if (!prev.length) continue;
+    for (const j of jointsOf(rows.get(keys[i])!)) {
+      gaps.push(Math.min(...prev.map((k) => Math.abs(j - k))));
+    }
+  }
+  gaps.sort((p, q) => p - q);
+  return {
+    min: gaps.length ? +gaps[0].toFixed(1) : 0,
+    median: gaps.length ? +gaps[gaps.length >> 1].toFixed(1) : 0,
+    below: gaps.filter((g) => g < target - 0.01).length,
+    total: gaps.length,
+    target,
+    recommended: Math.round(2 * width),
+  };
+}
+
 export function computeLayout(room: Room, batches: PlankBatch[], config: LayoutConfig): LayoutResult {
   const empty: LayoutResult = {
     placed: [],
@@ -34,6 +84,7 @@ export function computeLayout(room: Room, batches: PlankBatch[], config: LayoutC
       offcutsReused: 0, cuts: 0, ripCuts: 0, missingPlanks: 0, wasteAreaM2: 0, wastePct: 0,
       batchUsage: [], shortage: [],
       perimeterM: 0, doorCount: 0, plintheM: 0, partitionM: 0,
+      stagger: { min: 0, median: 0, below: 0, total: 0, target: 0, recommended: 0 },
     },
     cutList: [],
   };
@@ -258,6 +309,7 @@ export function computeLayout(room: Room, batches: PlankBatch[], config: LayoutC
       doorCount: (room.doors ?? []).length,
       plintheM: +(plintheCm / 100).toFixed(2),
       partitionM: +(partitionLenCm / 100).toFixed(2),
+      stagger: staggerStats(placed, config.orientationDeg, config.minJointOffset ?? 0, poseWidth),
     },
     cutList: placed
       .filter((pl) => pl.isCut || pl.isRipped)
