@@ -71,7 +71,10 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
     if (tool === 'draw') return [];
     const g: Guide[] = [];
     if (room.points.length >= 2) g.push({ pts: room.points, closed: true });
-    for (const w of room.partitions ?? []) g.push({ pts: w.points, closed: false });
+    // Les DEUX faces de chaque cloison, pas son tracé. Le tracé n'est qu'une face (règle
+    // métier) : s'y limiter interdit d'ancrer de l'autre côté, et la cloison qu'on démarre
+    // là est alors trop courte de l'épaisseur traversée.
+    for (const rect of partitionRects(room.partitions ?? [])) g.push({ pts: rect, closed: true });
     return g;
   }, [tool, room.points, room.partitions]);
 
@@ -88,6 +91,8 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
   const [wallAlong, setWallAlong] = useState('');
   /** Cote verrouillée sur l'axe (0° / 90°) : garantit une mesure bien droite. */
   const [axisLock, setAxisLock] = useState(false);
+  /** Alt maintenu : plus aucun aimant, le point se pose pile sous le curseur. */
+  const [freeSnap, setFreeSnap] = useState(false);
   const [pickedPlank, setPickedPlank] = useState<
     {
       label: string; length: number; nominalLength: number; width: number;
@@ -164,15 +169,21 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
 
   const snapMeasure = useCallback(
     (raw: Point): SnapResult => {
-      const wallSnap = (vThreshPx * 2.2) / view.scale;
+      // Aimant de mesure : rayon fixe À L'ÉCRAN (px), donc il RÉTRÉCIT quand on zoome —
+      // c'est ce qui rend une cote au centimètre près atteignable. Un plancher en cm
+      // (l'ancien : 12 cm quel que soit le zoom) happait tout point situé à moins de 12 cm
+      // d'une face : impossible de viser 117 quand la face est à 119,8. Borné en cm pour
+      // qu'un dézoom extrême ne rende pas l'aimant géant.
+      const wallSnap = Math.min(8 / view.scale, 25);
       const base = snapDrawPoint({
         points: measureStart ? [measureStart] : [],
         // Mesure = placement LIBRE et précis : pas d'aimant grille, on pose le point pile
         // où l'on veut. Seules les faces/murs happent le point quand on s'en approche.
         raw, gridStep: editor.gridStep, snapGrid: false,
         snapAngle: editor.snapAngle && !axisLock, angleStep: editor.angleStep,
-        vertexThreshold: wallSnap, guideThreshold: 12,
-        guides: measureGuides,
+        vertexThreshold: wallSnap, guideThreshold: 0,
+        // Alt : aucun aimant du tout, le point se pose exactement sous le curseur.
+        guides: freeSnap ? [] : measureGuides,
       });
       if (!measureStart || !axisLock) return base;
       // Axe verrouillé : on projette sur l'horizontale ou la verticale, celle dont on est
@@ -183,7 +194,7 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
         : { x: measureStart.x, y: base.point.y };
       return { ...base, point: p, angle: dx >= dy ? 0 : 90 };
     },
-    [measureStart, editor, view.scale, measureGuides, axisLock],
+    [measureStart, editor, view.scale, measureGuides, axisLock, freeSnap],
   );
 
   // --- Ligne de départ ---
@@ -519,12 +530,16 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
     const res = snapDrawPoint({
       points: drawing, raw, gridStep: editor.gridStep, snapGrid: editor.snapGrid,
       snapAngle: editor.snapAngle, angleStep: editor.angleStep, vertexThreshold: vThresh(),
-      // Plancher d'accroche aux murs/cloisons : ~10 cm quel que soit le zoom, pour caler
-      // pile sur un mur voisin même en zoomant, sans laisser de décroché.
-      guideThreshold: 10,
-      guides,
+      // Plancher d'accroche aux murs/cloisons : petit (2 cm) — assez pour absorber le
+      // décroché de quelques millimètres et venir buter pile sur un mur, sans happer tout
+      // ce qui passe à 10 cm. Au-delà, c'est le seuil écran qui décide, donc zoomer gagne
+      // en précision au lieu de ne rien changer.
+      guideThreshold: 2,
+      guides: freeSnap ? [] : guides,
       ...ov,
     });
+    // Alt : placement libre, aucun recalage de cote — on pose exactement sous le curseur.
+    if (freeSnap) return { ...res, hasLast: drawing.length > 0 };
     // Cloison : on cale la COTE face à face sur le demi-centimètre (pas le point d'axe).
     // C'est la mesure nette qui compte — on tombe pile sur 299,0 au lieu de 298,8 / 299,1.
     if (tool === 'wall' && !ov.overrideLen) {
@@ -533,7 +548,7 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
         : snapCloisonGap(res.point, editor.wallThickness, 0.5);
     }
     return { ...res, hasLast: drawing.length > 0 };
-  }, [drawing, editor, override, view.scale, guides, tool]);
+  }, [drawing, editor, override, view.scale, guides, tool, freeSnap]);
 
   /**
    * 1ᵉʳ point d'une cloison posé sur un mur : on cale la COTE NETTE (la face de la cloison,
@@ -636,6 +651,7 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
     const w = eventToWorld(e);
     rawWorld.current = w;
     if (tool === 'measure' && e.shiftKey !== axisLock) setAxisLock(e.shiftKey);
+    if (e.altKey !== freeSnap) setFreeSnap(e.altKey);
     if (isDrawing || tool === 'edit' || tool === 'startline' || tool === 'measure') {
       setCursorCm({ x: Math.round(w.x), y: Math.round(w.y) });
     }
@@ -898,6 +914,7 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
         if (e.shiftKey) redo(); else undo();
         return;
       }
+      if (e.key === 'Alt') { setFreeSnap(true); return; }
       if (e.code === 'Space') { spaceDown.current = true; return; }
       // Les raccourcis de zoom (+ - 0) sont désactivés quand on saisit une longueur au
       // clavier : sinon taper « 40 » déclenche « 0 » = ajuster la vue, et la vue saute.
@@ -906,10 +923,20 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
       else if (e.key === '-' || e.key === '_') { const c = center(); zoomAt(c.x, c.y, 1 / 1.2); }
       else if (e.key === '0') fit();
     };
-    const up = (e: KeyboardEvent) => { if (e.code === 'Space') spaceDown.current = false; };
+    const up = (e: KeyboardEvent) => {
+      if (e.key === 'Alt') setFreeSnap(false);
+      if (e.code === 'Space') spaceDown.current = false;
+    };
+    // Alt relâché hors de la fenêtre (changement d'onglet) : sinon l'aimant reste coupé.
+    const blur = () => setFreeSnap(false);
+    window.addEventListener('blur', blur);
     window.addEventListener('keydown', down);
     window.addEventListener('keyup', up);
-    return () => { window.removeEventListener('keydown', down); window.removeEventListener('keyup', up); };
+    return () => {
+      window.removeEventListener('keydown', down);
+      window.removeEventListener('keyup', up);
+      window.removeEventListener('blur', blur);
+    };
   }, [zoomAt, fit, size, undo, redo, isDrawing, tool]);
 
   // --- Clavier ---
@@ -1077,8 +1104,8 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
             <span className="hud-field">Cliquez le 1ᵉʳ point</span>
           )}
           <span className="hud-hint">
-            <b className={axisLock ? 'typed' : ''}>Maj</b> = cote bien droite (0°/90°) ·
-            accroche aux murs · Échap annule
+            <b className={axisLock ? 'typed' : ''}>Maj</b> = cote bien droite (0°/90°) ·{' '}
+            <b className={freeSnap ? 'typed' : ''}>Alt</b> = sans aimant · Échap annule
           </span>
         </div>
       )}

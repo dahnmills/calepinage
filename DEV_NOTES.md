@@ -50,6 +50,24 @@ Helper `dedupePoints` (`src/model/geometry.ts`), appliqué :
 
 ---
 
+## Aimants (accroche) — règles
+
+- Les guides d'accroche du tracé ET de la mesure sont les **faces** des cloisons
+  (`partitionRects`), jamais le tracé (`partition.points`). Le tracé n'est qu'UNE face :
+  s'y limiter interdit d'ancrer de l'autre côté, et la cloison démarrée là est alors trop
+  courte de l'épaisseur traversée.
+- Le seuil d'accroche se mesure **en pixels écran**, pas en cm. Un plancher en cm ne
+  rétrécit pas au zoom : zoomer n'apporte alors aucune précision et l'aimant happe tout ce
+  qui passe (bug « je vise 117, la face est à 119,8, ça colle sur la face »).
+  Mesure : `min(8 / view.scale, 25)` cm, `guideThreshold: 0`.
+  Tracé : `guideThreshold: 2` cm — juste de quoi absorber un décroché millimétrique.
+- **Alt maintenu = aucun aimant** (état `freeSnap`), pour la mesure comme pour le tracé :
+  le point se pose pile sous le curseur, sans recalage de cote. Suivi au `mousemove`
+  (`e.altKey`) + `keydown`/`keyup` + `blur` (sinon l'aimant reste coupé après un
+  changement d'onglet).
+
+---
+
 ## Garde-fou anti-page-blanche
 
 - `src/ui/ErrorBoundary.tsx` enveloppe `CanvasView` dans `App.tsx` : un crash de rendu montre
