@@ -385,9 +385,18 @@ sont détectés par **rastérisation raster** de la géométrie de couverture :
 
 Cas d'usage : `polygon-clipping` plante sur certaines géométries dégénérées (cloisons fines,
 L-shaped rooms complexes, accumulation d'erreurs flottantes) ; la rastérisation est plus
-robuste. Mesures sur JSON réels : zéro faux positif, détection 100 % des trous > 20 cm².
+robuste. Mesures sur JSON réels : zéro faux positif. **Attention à la portée réelle de la
+garantie** : l'érosion (`ERODE = 3` @ `STEP = 0.5`) ignore tout ce qui est plus fin qu'environ
+3 cm d'épaisseur — la détection couvre donc les vides de plus de ~3 cm d'épaisseur, PAS
+« tout trou de 20 cm² » quelle que soit sa forme (un vide filiforme de 20 cm² mais large de
+1 cm passerait au travers).
 Les coordonnées de la région sont en **coordonnées de la pièce** (pas d'offset cloisons) pour
 l'affichage sur canevas.
+
+**Garde-fou mémoire** : au-delà de `W × H > 6_000_000` cellules (~150 m² à `STEP = 0.5`), la
+rastérisation est impossible à ce coût — `coverageHoles` renvoie alors un diagnostic `info`
+(`coverage-skipped`) invitant à vérifier visuellement, plutôt qu'un tableau vide qui se
+lirait comme « aucun trou » (faux feu vert).
 
 ### Garde-fou `joint-flush` — régionalisation
 

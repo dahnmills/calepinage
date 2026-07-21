@@ -40,6 +40,9 @@ interface State {
   result: LayoutResult | null;
   diagnostics: Diagnostic[];
   focusedDiagnostic: Diagnostic | null;
+  /** Incrémenté à chaque appel de `focusDiagnostic`, même sur le même objet : permet à
+   *  CanvasView de recentrer sur un re-clic du même diagnostic (l'identité seule ne bouge pas). */
+  focusNonce: number;
   focusDiagnostic: (d: Diagnostic | null) => void;
   /** Cotes posées sur le plan (distances entre murs). */
   measures: Measure[];
@@ -173,6 +176,7 @@ export const useStore = create<State>((set, get) => ({
   result: null,
   diagnostics: [],
   focusedDiagnostic: null,
+  focusNonce: 0,
   past: [],
   future: [],
 
@@ -512,7 +516,7 @@ export const useStore = create<State>((set, get) => ({
     const result = computeLayout(room, flattenPacks(packs), config);
     set({ result, diagnostics: validatePlan(room, result, config), focusedDiagnostic: null });
   },
-  focusDiagnostic: (d) => set({ focusedDiagnostic: d }),
+  focusDiagnostic: (d) => set((s) => ({ focusedDiagnostic: d, focusNonce: s.focusNonce + 1 })),
 }));
 
 // Sauvegarde continue : le plan doit survivre à un rechargement de la page.

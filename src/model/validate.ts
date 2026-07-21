@@ -24,7 +24,13 @@ function coverageHoles(result: LayoutResult): Diagnostic[] {
   }
   minX -= 5; maxX += 5; minY -= 5; maxY += 5;
   const W = Math.ceil((maxX - minX) / STEP), H = Math.ceil((maxY - minY) / STEP);
-  if (W <= 0 || H <= 0 || W * H > 6_000_000) return []; // garde-fou mémoire
+  if (W <= 0 || H <= 0) return [];
+  if (W * H > 6_000_000) {
+    // garde-fou mémoire : on ne peut pas rastériser un plan aussi grand, mais on ne
+    // doit surtout pas rendre un silencieux "pas de trou" (faux feu vert de certification).
+    return [{ severity: 'info', kind: 'coverage-skipped',
+      message: 'Plan trop grand pour vérifier automatiquement les trous — contrôlez visuellement la couverture.' }];
+  }
 
   const floor = new Uint8Array(W * H), laid = new Uint8Array(W * H);
   const mark = (buf: Uint8Array, poly: Point[], holes: Point[][]) => {

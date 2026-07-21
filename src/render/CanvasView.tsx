@@ -56,7 +56,7 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps, showC
     startMeasure, finishMeasure, cancelMeasure, removeMeasure,
     tagSpace,
     snapshot, undo, redo,
-    diagnostics, focusedDiagnostic,
+    diagnostics, focusedDiagnostic, focusNonce,
   } = useStore();
   const isDrawing = tool === 'draw' || tool === 'hole' || tool === 'wall';
   // Le moteur raisonne en lots de lames ; le stock, lui, se saisit en paquets.
@@ -516,7 +516,10 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps, showC
     const w = Math.max(d.region.w, 20), h = Math.max(d.region.h, 20);
     const scale = Math.min((size.w - pad * 2) / w, (size.h - pad * 2) / h);
     setView({ scale, ox: d.region.x - pad / scale, oy: d.region.y - pad / scale });
-  }, [focusedDiagnostic, size]);
+    // `focusNonce` n'est pas lu ici : il ne sert qu'à FORCER cet effet à se redéclencher
+    // quand on reclique le MÊME diagnostic après avoir déplacé la vue (l'identité de l'objet
+    // `focusedDiagnostic`, elle, ne change pas dans ce cas).
+  }, [focusedDiagnostic, focusNonce, size]);
 
   // Pose d'une porte : sur le mur OU la cloison la plus proche, la plus proche gagne.
   const placeDoor = (w: Point) => {

@@ -49,23 +49,6 @@ export default function ResultsPanel() {
         );
       })()}
 
-      {stats.missingPlanks > 0 && (
-        <div className="alert">
-          ⚠ <b>{stats.missingPlanks} lame(s) manquante(s)</b> — la pièce est calepinée en entier,
-          mais ces lames (hachurées en rouge sur le plan) restent à acheter :{' '}
-          {stats.shortage.map((s) => `${s.missing} × ${batchName(s.batchId)}`).join(', ')}.
-        </div>
-      )}
-
-      {stats.narrowRips > 0 && (
-        <div className="alert">
-          ⚠ <b>{stats.narrowRips} lame(s) à refendre sous {config.minRipWidth} cm</b> de large.
-          Elles sont bien posées — les retirer laisserait un vide contre le mur — mais ce sont
-          des coupes délicates. Décaler la ligne de départ ou l'orientation les fait souvent
-          disparaître.
-        </div>
-      )}
-
       {stats.droppedSlivers > 0 && (
         <div className="note">
           <b>{stats.droppedSlivers} filet(s) écarté(s)</b> — moins d'un centimètre de large,
@@ -78,11 +61,6 @@ export default function ResultsPanel() {
           <b>Décalage des joints obtenu</b> — minimum <b>{stats.stagger.min} cm</b>,
           médiane {stats.stagger.median} cm, sur {stats.stagger.total} joints.
           {' '}Refend le plus étroit : <b>{stats.minRipWidth} cm</b>.
-          {stats.stagger.below > 0 && (
-            <>
-              {' '}<b>{stats.stagger.below}</b> joint(s) sous les {stats.stagger.target} cm demandés.
-            </>
-          )}
           {stats.stagger.below > stats.stagger.total * 0.15 && stats.stagger.recommended > 0
             && stats.stagger.target > stats.stagger.recommended && (
             <>
