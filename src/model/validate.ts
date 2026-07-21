@@ -89,17 +89,16 @@ function jointDiagnostics(result: LayoutResult, config: LayoutConfig): Diagnosti
   const deg = (-(config.orientationDeg ?? 0) * Math.PI) / 180;
   const un = (p: Point) => ({ x: p.x * Math.cos(deg) - p.y * Math.sin(deg), y: p.x * Math.sin(deg) + p.y * Math.cos(deg) });
   // Regrouper par rangée (y arrondi au dixième en repère de pose) ; joint = fin de lame.
-  type Seg = { x0: number; x1: number; cx: number; cy: number };
+  type Seg = { x0: number; x1: number };
   const rows = new Map<string, Seg[]>();
+  let rowH = 0;
   for (const pl of result.placed) {
     const r = pl.rect.map(un);
     const ys = r.map((p) => p.y), xs = r.map((p) => p.x);
     const key = (Math.round(Math.min(...ys) * 10) / 10).toFixed(1);
     if (!rows.has(key)) rows.set(key, []);
-    rows.get(key)!.push({
-      x0: Math.min(...xs), x1: Math.max(...xs),
-      cx: (Math.min(...xs) + Math.max(...xs)) / 2, cy: (Math.min(...ys) + Math.max(...ys)) / 2,
-    });
+    rows.get(key)!.push({ x0: Math.min(...xs), x1: Math.max(...xs) });
+    rowH = Math.max(rowH, Math.max(...ys) - Math.min(...ys));
   }
   const keys = [...rows.keys()].sort((a, b) => parseFloat(a) - parseFloat(b));
   const jointsOf = (segs: Seg[]) => segs.filter((s) => segs.some((o) => o !== s && Math.abs(o.x0 - s.x1) < 1.5)).map((s) => s.x1);
@@ -107,6 +106,10 @@ function jointDiagnostics(result: LayoutResult, config: LayoutConfig): Diagnosti
   const FLUSH = 6;
   const rot = (x: number, y: number) => ({ x: x * Math.cos(-deg) - y * Math.sin(-deg), y: x * Math.sin(-deg) + y * Math.cos(-deg) });
   for (let i = 1; i < keys.length; i++) {
+    // Deux rangées séparées par un vide (pièce en L, décrochement, bandes non contiguës) ne
+    // se comparent pas : sans ce garde-fou, un joint-flush est reporté sur une région sans
+    // rapport (cf. staggerStats dans layout.ts).
+    if (parseFloat(keys[i]) - parseFloat(keys[i - 1]) > rowH + 0.6) continue;
     const prev = jointsOf(rows.get(keys[i - 1])!);
     if (!prev.length) continue;
     const yTop = parseFloat(keys[i]);
