@@ -2,7 +2,7 @@ import { useStore } from '../store/useStore';
 import { packIdOf } from '../model/stock';
 
 export default function ResultsPanel() {
-  const { result, packs, config } = useStore();
+  const { result, packs, config, diagnostics, focusDiagnostic } = useStore();
   if (!result) {
     return (
       <section className="panel">
@@ -22,22 +22,32 @@ export default function ResultsPanel() {
     <section className="panel">
       <h2>Résultats</h2>
 
-      {stats.missingPlanks > 0 && (
-        <div className="alert">
-          ⚠ <b>{stats.missingPlanks} lame(s) manquante(s)</b> — la pièce est calepinée en entier,
-          mais ces lames (hachurées en rouge sur le plan) restent à acheter :{' '}
-          {stats.shortage.map((s) => `${s.missing} × ${batchName(s.batchId)}`).join(', ')}.
-        </div>
-      )}
-
-      {stats.narrowRips > 0 && (
-        <div className="alert">
-          ⚠ <b>{stats.narrowRips} lame(s) à refendre sous {config.minRipWidth} cm</b> de large.
-          Elles sont bien posées — les retirer laisserait un vide contre le mur — mais ce sont
-          des coupes délicates. Décaler la ligne de départ ou l'orientation les fait souvent
-          disparaître.
-        </div>
-      )}
+      {(() => {
+        const errs = diagnostics.filter((d) => d.severity === 'error').length;
+        const others = diagnostics.length - errs;
+        if (diagnostics.length === 0) {
+          return <div className="verdict-ok">✓ Plan posable</div>;
+        }
+        const cls = errs > 0 ? 'alert' : 'note';
+        const label = errs > 0
+          ? `${errs} erreur(s) à corriger${others ? ` · ${others} à vérifier` : ''}`
+          : `Posable — ${others} point(s) à vérifier`;
+        return (
+          <>
+            <div className={cls}><b>{label}</b></div>
+            <ul className="diag-list">
+              {diagnostics.map((d, i) => (
+                <li key={i} className={d.severity}
+                    onClick={() => d.region && focusDiagnostic(d)}
+                    title={d.region ? 'Cliquer pour voir sur le plan' : undefined}>
+                  <span>{d.severity === 'error' ? '⛔' : d.severity === 'warn' ? '⚠' : 'ℹ'}</span>
+                  <span>{d.message}</span>
+                </li>
+              ))}
+            </ul>
+          </>
+        );
+      })()}
 
       {stats.droppedSlivers > 0 && (
         <div className="note">
@@ -51,11 +61,6 @@ export default function ResultsPanel() {
           <b>Décalage des joints obtenu</b> — minimum <b>{stats.stagger.min} cm</b>,
           médiane {stats.stagger.median} cm, sur {stats.stagger.total} joints.
           {' '}Refend le plus étroit : <b>{stats.minRipWidth} cm</b>.
-          {stats.stagger.below > 0 && (
-            <>
-              {' '}<b>{stats.stagger.below}</b> joint(s) sous les {stats.stagger.target} cm demandés.
-            </>
-          )}
           {stats.stagger.below > stats.stagger.total * 0.15 && stats.stagger.recommended > 0
             && stats.stagger.target > stats.stagger.recommended && (
             <>

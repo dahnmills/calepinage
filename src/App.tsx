@@ -28,6 +28,7 @@ export default function App() {
   const [highlightCuts, setHighlightCuts] = useState(false);
   const [showNumbers, setShowNumbers] = useState(true);
   const [showGaps, setShowGaps] = useState(true);
+  const [showChecks, setShowChecks] = useState(true);
   // Les panneaux se replient : sur un plan large, on veut tout l'écran pour le dessin.
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
@@ -67,6 +68,13 @@ export default function App() {
               onChange={(e) => setShowGaps(e.target.checked)}
             />
             Cotes des cloisons
+          </label>
+          <label className="cut-toggle">
+            <input
+              type="checkbox" checked={showChecks}
+              onChange={(e) => setShowChecks(e.target.checked)}
+            />
+            Vérifications
           </label>
 
           <span className="hd-sep" />
@@ -121,7 +129,7 @@ export default function App() {
         <main className="center">
           <div className="canvas-wrap">
             <ErrorBoundary>
-              <CanvasView highlightCuts={highlightCuts} showNumbers={showNumbers} showGaps={showGaps} />
+              <CanvasView highlightCuts={highlightCuts} showNumbers={showNumbers} showGaps={showGaps} showChecks={showChecks} />
             </ErrorBoundary>
             <Toolbar />
 

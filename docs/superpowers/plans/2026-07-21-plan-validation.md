@@ -16,7 +16,12 @@
 - Tout script de test jetable se lance **depuis le dossier projet** (`node ./_x.cjs` puis `rm`), jamais depuis le scratchpad (résolution `node_modules`).
 - Vérif finale de chaque tâche touchant du code : `npx tsc --noEmit` vert.
 - Le seuil « vrai trou » = 3 érosions à 0,5 cm (~3 cm d'épaisseur mini), aligné sur le jeu de dilatation. Constante nommée interne.
-- Le banc doit garder `error` count = 0 sur 120 simulations + les 3 JSON réels de `~/Downloads/calepinage-2026-07-20*.json`.
+- Le banc doit garder le nombre de **trous** (`kind === 'hole'`) = 0 sur 120 simulations
+  + les 3 JSON réels de `~/Downloads/calepinage-2026-07-20*.json`. (Correction en cours
+  d'exécution : la contrainte visait d'abord `error` count = 0, mais les stocks SYNTHÉTIQUES
+  du banc sont volontairement petits et produisent légitimement des `missing` — stock
+  insuffisant, un vrai diagnostic, pas un défaut. L'invariant réel est « aucun trou
+  inventé ». Sur les 3 plans réels, stock adéquat, `error` = 0 reste vrai.)
 
 ---
 
@@ -354,34 +359,48 @@ git commit --allow-empty -m "test(validate): 0 trou confirme sur les 3 plans ree
 
 **Interfaces:**
 - Consumes: `validatePlan` de `../src/model/validate`.
-- Produces: métrique `errors: number` dans `Metrics`, affichée en colonne.
+- Produces: métriques `holes: number` (garde-fou, doit rester 0) et `errors: number`
+  (informatif) dans `Metrics`, affichées en colonnes.
 
-- [ ] **Step 1: Add the metric**
+CORRECTION vs version initiale : le garde-fou porte sur les **trous**, pas sur toutes les
+erreurs. Les stocks synthétiques du banc sont volontairement petits → ils produisent
+légitimement des `missing` (stock insuffisant), qui sont des erreurs réelles mais pas des
+défauts d'algorithme. `holes` doit rester 0 partout ; `errors` peut être > 0 sur les cas
+synthétiques sous-dimensionnés, et vaut 0 sur les 3 plans réels.
+
+- [ ] **Step 1: Add the metrics**
 
 Dans `tools/bench-layout.ts`, ajouter à `interface Metrics` :
 ```ts
-  /** Diagnostics de gravité error (trou, lame manquante). Doit rester à 0. */
+  /** Diagnostics de type 'hole' (sol non couvert). Garde-fou : doit rester à 0. */
+  holes: number;
+  /** Diagnostics de gravité error, tous types confondus. Informatif : les stocks
+   * synthétiques du banc produisent des 'missing' légitimes (stock insuffisant). */
   errors: number;
 ```
 En tête du fichier, importer : `import { validatePlan } from '../src/model/validate';`
 Dans `measure()`, après `const res: any = computeLayout(...)` :
 ```ts
-  const errors = validatePlan(room, res, config).filter((d) => d.severity === 'error').length;
+  const diags = validatePlan(room, res, config);
+  const holes = diags.filter((d) => d.kind === 'hole').length;
+  const errors = diags.filter((d) => d.severity === 'error').length;
 ```
-Dans l'objet retourné, ajouter `errors,`.
-Dans le tableau `cols`, ajouter `'errors'` en premier après `'joints'`.
+Dans l'objet retourné, ajouter `holes,` et `errors,`.
+Dans le tableau `cols`, ajouter `'holes'` puis `'errors'` en premier après `'joints'`.
 
 - [ ] **Step 2: Run the bench**
 
 Run: `npx esbuild tools/bench-layout.ts --bundle --platform=node --format=cjs --outfile=_b.cjs && node _b.cjs --full`
-Expected: colonne `errors` à **0** sur toutes les lignes et en moyenne.
+Expected: colonne `holes` à **0** sur toutes les lignes ET en moyenne. La colonne `errors`
+peut être > 0 (cas synthétiques à stock insuffisant) — c'est normal, ne PAS y toucher.
+Si `holes` est > 0 où que ce soit → STOP, BLOCKED (vraie régression de trou).
 
 - [ ] **Step 3: Commit**
 
 ```bash
 rm -f _b.cjs
 git add tools/bench-layout.ts
-git commit -m "test(bench): colonne errors (validatePlan) — garde-fou anti-trou"
+git commit -m "test(bench): colonnes holes (garde-fou anti-trou) + errors (informatif)"
 ```
 
 ---

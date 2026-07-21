@@ -8,6 +8,7 @@ import { computeLayout } from '../model/layout';
 import { detectSpaces } from '../model/spaces';
 import { pointInPolygon, dedupePoints } from '../model/geometry';
 import { clearProject, loadProject, saveProject, type Project } from './persist';
+import { validatePlan, type Diagnostic } from '../model/validate';
 
 export type Tool = 'draw' | 'edit' | 'view' | 'hole' | 'door' | 'wall' | 'startline' | 'measure' | 'space';
 
@@ -37,6 +38,12 @@ interface State {
   packs: Pack[];
   config: LayoutConfig;
   result: LayoutResult | null;
+  diagnostics: Diagnostic[];
+  focusedDiagnostic: Diagnostic | null;
+  /** Incrémenté à chaque appel de `focusDiagnostic`, même sur le même objet : permet à
+   *  CanvasView de recentrer sur un re-clic du même diagnostic (l'identité seule ne bouge pas). */
+  focusNonce: number;
+  focusDiagnostic: (d: Diagnostic | null) => void;
   /** Cotes posées sur le plan (distances entre murs). */
   measures: Measure[];
   /** Premier point d'une cote en cours (le second suit le curseur). */
@@ -167,6 +174,9 @@ export const useStore = create<State>((set, get) => ({
   packs: saved?.packs ?? [defaultPack()],
   config: { ...defaultConfig, ...(saved?.config ?? {}) },
   result: null,
+  diagnostics: [],
+  focusedDiagnostic: null,
+  focusNonce: 0,
   past: [],
   future: [],
 
@@ -186,7 +196,7 @@ export const useStore = create<State>((set, get) => ({
       room: prev.room, measures: prev.measures,
       past: past.slice(0, -1),
       future: [{ room, measures }, ...future].slice(0, HISTORY_MAX),
-      result: null, selectedVertex: null, drawing: [],
+      result: null, diagnostics: [], focusedDiagnostic: null, selectedVertex: null, drawing: [],
     });
   },
   redo: () => {
@@ -197,13 +207,13 @@ export const useStore = create<State>((set, get) => ({
       room: next.room, measures: next.measures,
       past: [...past, { room, measures }].slice(-HISTORY_MAX),
       future: future.slice(1),
-      result: null, selectedVertex: null, drawing: [],
+      result: null, diagnostics: [], focusedDiagnostic: null, selectedVertex: null, drawing: [],
     });
   },
   newProject: () => {
     clearProject();
     set({
-      room: emptyRoom, measures: [], measureStart: null, drawing: [], result: null,
+      room: emptyRoom, measures: [], measureStart: null, drawing: [], result: null, diagnostics: [], focusedDiagnostic: null,
       past: [], future: [], selectedVertex: null, tool: 'draw',
       config: { ...defaultConfig },
     });
@@ -212,7 +222,7 @@ export const useStore = create<State>((set, get) => ({
     // Un plan enregistré peut contenir des sommets doublés : on nettoie à l'ouverture.
     room: { ...p.room, points: dedupePoints(p.room.points) },
     packs: p.packs, config: { ...defaultConfig, ...p.config },
-    measures: p.measures, drawing: [], result: null, past: [], future: [],
+    measures: p.measures, drawing: [], result: null, diagnostics: [], focusedDiagnostic: null, past: [], future: [],
     selectedVertex: null, tool: 'edit',
   }),
 
@@ -229,16 +239,16 @@ export const useStore = create<State>((set, get) => ({
       id: `d${doorSeq++}`, host, edgeIndex, segIndex, center,
       width: 83, hinge: 'l', swing: 1, throughFloor: false,
     };
-    set({ room: { ...room, doors: [...room.doors, door] }, result: null });
+    set({ room: { ...room, doors: [...room.doors, door] }, result: null, diagnostics: [], focusedDiagnostic: null });
   },
   updateDoor: (index, patch) =>
     set({
       room: { ...get().room, doors: get().room.doors.map((d, i) => (i === index ? { ...d, ...patch } : d)) },
-      result: null,
+      result: null, diagnostics: [], focusedDiagnostic: null,
     }),
   clearDoors: () => {
     get().snapshot();
-    set({ room: { ...get().room, doors: [] }, result: null });
+    set({ room: { ...get().room, doors: [] }, result: null, diagnostics: [], focusedDiagnostic: null });
   },
   closePartition: () => {
     const pts = dedupePoints(get().drawing);
@@ -248,7 +258,7 @@ export const useStore = create<State>((set, get) => ({
       const { wallThickness, wallAlign } = get().editor;
       const part: Partition = { id: `w${partSeq++}`, points: pts, thickness: wallThickness, align: wallAlign };
       // On reste sur l'outil : on enchaîne les cloisons d'un logement sans y revenir.
-      set({ room: { ...room, partitions: [...room.partitions, part] }, drawing: [], result: null });
+      set({ room: { ...room, partitions: [...room.partitions, part] }, drawing: [], result: null, diagnostics: [], focusedDiagnostic: null });
     }
   },
   setPartitionAlign: (index, align) => get().updatePartition(index, { align }),
@@ -259,7 +269,7 @@ export const useStore = create<State>((set, get) => ({
         ...get().room,
         partitions: get().room.partitions.map((w, i) => (i === index ? { ...w, ...patch } : w)),
       },
-      result: null,
+      result: null, diagnostics: [], focusedDiagnostic: null,
     });
   },
 
@@ -286,13 +296,13 @@ export const useStore = create<State>((set, get) => ({
         excluded: false,
         ...patch,
       }];
-    set({ room: { ...room, spaceTags: next }, result: null });
+    set({ room: { ...room, spaceTags: next }, result: null, diagnostics: [], focusedDiagnostic: null });
   },
   removeSpaceTag: (id) => {
     get().snapshot();
     set({
       room: { ...get().room, spaceTags: (get().room.spaceTags ?? []).filter((t) => t.id !== id) },
-      result: null,
+      result: null, diagnostics: [], focusedDiagnostic: null,
     });
   },
 
@@ -313,26 +323,26 @@ export const useStore = create<State>((set, get) => ({
   },
   clearPartitions: () => {
     get().snapshot();
-    set({ room: { ...get().room, partitions: [] }, result: null });
+    set({ room: { ...get().room, partitions: [] }, result: null, diagnostics: [], focusedDiagnostic: null });
   },
   removePartition: (index) => {
     get().snapshot();
     set({
       room: { ...get().room, partitions: get().room.partitions.filter((_, i) => i !== index) },
-      result: null,
+      result: null, diagnostics: [], focusedDiagnostic: null,
     });
   },
   movePartitionPoint: (partIndex, ptIndex, p) => {
     const parts = get().room.partitions.map((w, i) =>
       i === partIndex ? { ...w, points: w.points.map((q, k) => (k === ptIndex ? p : q)) } : w,
     );
-    set({ room: { ...get().room, partitions: parts }, result: null });
+    set({ room: { ...get().room, partitions: parts }, result: null, diagnostics: [], focusedDiagnostic: null });
   },
   moveWholePartition: (index, dx, dy) => {
     const parts = get().room.partitions.map((w, i) =>
       i === index ? { ...w, points: w.points.map((q) => ({ x: q.x + dx, y: q.y + dy })) } : w,
     );
-    set({ room: { ...get().room, partitions: parts }, result: null });
+    set({ room: { ...get().room, partitions: parts }, result: null, diagnostics: [], focusedDiagnostic: null });
   },
   setPartitionSegmentLength: (index, seg, lengthCm) => {
     get().snapshot();
@@ -349,7 +359,7 @@ export const useStore = create<State>((set, get) => ({
       for (let k = seg + 1; k < pts.length; k++) pts[k] = { x: pts[k].x + dx, y: pts[k].y + dy };
       return { ...w, points: pts };
     });
-    set({ room: { ...get().room, partitions: parts }, result: null });
+    set({ room: { ...get().room, partitions: parts }, result: null, diagnostics: [], focusedDiagnostic: null });
   },
   setPartitionLength: (index, lengthCm) => {
     get().snapshot();
@@ -365,13 +375,13 @@ export const useStore = create<State>((set, get) => ({
       pts[j] = { x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k };
       return { ...w, points: pts };
     });
-    set({ room: { ...get().room, partitions: parts }, result: null });
+    set({ room: { ...get().room, partitions: parts }, result: null, diagnostics: [], focusedDiagnostic: null });
   },
   removeDoor: (index) => {
     get().snapshot();
     set({
       room: { ...get().room, doors: get().room.doors.filter((_, i) => i !== index) },
-      result: null,
+      result: null, diagnostics: [], focusedDiagnostic: null,
     });
   },
   setEditor: (patch) => set({ editor: { ...get().editor, ...patch } }),
@@ -382,7 +392,7 @@ export const useStore = create<State>((set, get) => ({
     const pts = dedupePoints(get().drawing);
     if (pts.length >= 3) {
       get().snapshot();
-      set({ room: { ...get().room, points: pts }, drawing: [], tool: 'edit', result: null });
+      set({ room: { ...get().room, points: pts }, drawing: [], tool: 'edit', result: null, diagnostics: [], focusedDiagnostic: null });
     }
   },
   closeHole: () => {
@@ -390,35 +400,35 @@ export const useStore = create<State>((set, get) => ({
     if (pts.length >= 3) {
       get().snapshot();
       const room = get().room;
-      set({ room: { ...room, holes: [...room.holes, pts] }, drawing: [], result: null });
+      set({ room: { ...room, holes: [...room.holes, pts] }, drawing: [], result: null, diagnostics: [], focusedDiagnostic: null });
     }
   },
   clearHoles: () => {
     get().snapshot();
-    set({ room: { ...get().room, holes: [] }, result: null });
+    set({ room: { ...get().room, holes: [] }, result: null, diagnostics: [], focusedDiagnostic: null });
   },
-  clearRoom: () => set({ drawing: [], result: null }),
+  clearRoom: () => set({ drawing: [], result: null, diagnostics: [], focusedDiagnostic: null }),
   setRoomPoints: (pts) =>
     set({
       room: { ...get().room, points: pts, holes: [], doors: [], partitions: [], spaceTags: [] },
-      result: null, selectedVertex: null,
+      result: null, diagnostics: [], focusedDiagnostic: null, selectedVertex: null,
     }),
 
   moveVertex: (index, p) => {
     const pts = get().room.points.map((q, i) => (i === index ? p : q));
-    set({ room: { ...get().room, points: pts }, result: null });
+    set({ room: { ...get().room, points: pts }, result: null, diagnostics: [], focusedDiagnostic: null });
   },
   insertVertex: (edgeIndex, p) => {
     const pts = [...get().room.points];
     pts.splice(edgeIndex + 1, 0, p);
-    set({ room: { ...get().room, points: pts }, result: null, selectedVertex: edgeIndex + 1 });
+    set({ room: { ...get().room, points: pts }, result: null, diagnostics: [], focusedDiagnostic: null, selectedVertex: edgeIndex + 1 });
   },
   deleteVertex: (index) => {
     const pts = get().room.points;
     if (pts.length <= 3) return; // garde un polygone valide
     set({
       room: { ...get().room, points: pts.filter((_, i) => i !== index) },
-      result: null,
+      result: null, diagnostics: [], focusedDiagnostic: null,
       selectedVertex: null,
     });
   },
@@ -432,11 +442,11 @@ export const useStore = create<State>((set, get) => ({
     const cur = Math.hypot(dx, dy) || 1;
     const k = lengthCm / cur;
     pts[(edgeIndex + 1) % n] = { x: a.x + dx * k, y: a.y + dy * k };
-    set({ room: { ...get().room, points: pts }, result: null });
+    set({ room: { ...get().room, points: pts }, result: null, diagnostics: [], focusedDiagnostic: null });
   },
 
   addPack: () => set({ packs: [...get().packs, defaultPack(get().packs.length + 1)] }),
-  setPacks: (packs) => set({ packs, result: null }),
+  setPacks: (packs) => set({ packs, result: null, diagnostics: [], focusedDiagnostic: null }),
   updatePack: (id, patch) =>
     set({ packs: get().packs.map((p) => (p.id === id ? { ...p, ...patch } : p)) }),
   removePack: (id) => set({ packs: get().packs.filter((p) => p.id !== id) }),
@@ -503,8 +513,10 @@ export const useStore = create<State>((set, get) => ({
 
   run: () => {
     const { room, packs, config } = get();
-    set({ result: computeLayout(room, flattenPacks(packs), config) });
+    const result = computeLayout(room, flattenPacks(packs), config);
+    set({ result, diagnostics: validatePlan(room, result, config), focusedDiagnostic: null });
   },
+  focusDiagnostic: (d) => set((s) => ({ focusedDiagnostic: d, focusNonce: s.focusNonce + 1 })),
 }));
 
 // Sauvegarde continue : le plan doit survivre à un rechargement de la page.
