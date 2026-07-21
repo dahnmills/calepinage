@@ -84,6 +84,56 @@ function coverageHoles(result: LayoutResult): Diagnostic[] {
   return out;
 }
 
+/** Joints collés entre rangées voisines (repère de pose), régionalisés en repère PIÈCE. */
+function jointDiagnostics(result: LayoutResult, config: LayoutConfig): Diagnostic[] {
+  const deg = (-(config.orientationDeg ?? 0) * Math.PI) / 180;
+  const un = (p: Point) => ({ x: p.x * Math.cos(deg) - p.y * Math.sin(deg), y: p.x * Math.sin(deg) + p.y * Math.cos(deg) });
+  // Regrouper par rangée (y arrondi au dixième en repère de pose) ; joint = fin de lame.
+  type Seg = { x0: number; x1: number; cx: number; cy: number };
+  const rows = new Map<string, Seg[]>();
+  for (const pl of result.placed) {
+    const r = pl.rect.map(un);
+    const ys = r.map((p) => p.y), xs = r.map((p) => p.x);
+    const key = (Math.round(Math.min(...ys) * 10) / 10).toFixed(1);
+    if (!rows.has(key)) rows.set(key, []);
+    rows.get(key)!.push({
+      x0: Math.min(...xs), x1: Math.max(...xs),
+      cx: (Math.min(...xs) + Math.max(...xs)) / 2, cy: (Math.min(...ys) + Math.max(...ys)) / 2,
+    });
+  }
+  const keys = [...rows.keys()].sort((a, b) => parseFloat(a) - parseFloat(b));
+  const jointsOf = (segs: Seg[]) => segs.filter((s) => segs.some((o) => o !== s && Math.abs(o.x0 - s.x1) < 1.5)).map((s) => s.x1);
+  const out: Diagnostic[] = [];
+  const FLUSH = 6;
+  const rot = (x: number, y: number) => ({ x: x * Math.cos(-deg) - y * Math.sin(-deg), y: x * Math.sin(-deg) + y * Math.cos(-deg) });
+  for (let i = 1; i < keys.length; i++) {
+    const prev = jointsOf(rows.get(keys[i - 1])!);
+    if (!prev.length) continue;
+    const yTop = parseFloat(keys[i]);
+    for (const j of jointsOf(rows.get(keys[i])!)) {
+      const gap = Math.min(...prev.map((k) => Math.abs(j - k)));
+      if (gap < FLUSH - 1e-6) {
+        // Position du joint en repère pièce : point (j, yTop) tourné à l'envers.
+        const c = rot(j, yTop);
+        out.push({ severity: 'warn', kind: 'joint-flush',
+          message: `Joint collé (${gap.toFixed(1)} cm de la rangée voisine).`,
+          region: { x: c.x - 8, y: c.y - 8, w: 16, h: 16 } });
+      }
+    }
+  }
+  return out;
+}
+
+/** Morceaux sous la coupe mini, agrégés (pas de région). */
+function shortPieceDiagnostics(result: LayoutResult, config: LayoutConfig): Diagnostic[] {
+  const minCut = config.minCutLength ?? 0;
+  if (minCut <= 0) return [];
+  const n = result.placed.filter((p) => p.usedLength > 0.05 && p.usedLength < minCut - 0.05).length;
+  return n > 0
+    ? [{ severity: 'info', kind: 'piece-short', count: n, message: `${n} morceau(x) sous ${minCut} cm.` }]
+    : [];
+}
+
 /**
  * Certifie la qualité d'un plan calepiné. Question sur le RÉSULTAT, indépendante du motif :
  * marche sur n'importe quel plan, comme le banc de mesure.
@@ -105,5 +155,9 @@ export function validatePlan(_room: Room, result: LayoutResult, config: LayoutCo
       message: `${st.stagger.below} joint(s) sous le décalage demandé (${st.stagger.target} cm).` });
   }
   out.push(...coverageHoles(result));
+  out.push(...jointDiagnostics(result, config));
+  out.push(...shortPieceDiagnostics(result, config));
+  const order = { error: 0, warn: 1, info: 2 };
+  out.sort((a, b) => order[a.severity] - order[b.severity]);
   return out;
 }
