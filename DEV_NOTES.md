@@ -356,6 +356,84 @@ restante : la capture pouvait précéder le déploiement. À revérifier sur un 
 
 ---
 
+## Validation du plan
+
+### Module `validate.ts` — structure
+
+Le module `src/model/validate.ts` exporte `validatePlan(room, result, config): Diagnostic[]`
+qui contrôle un plan posé (géométrie + layout) et retourne une liste de diagnostics.
+
+Trois **niveaux de sévérité** :
+- **`error`** : le plan est FAUX (trou, lame manquante, refend inposable). Ne pas poser.
+- **`warn`** : posable mais coupe DÉLICATE (refend fin < 6 cm, joint collé trop proche du mur,
+  joint collé entre deux rangées non contiguës). À relire avant de poser.
+- **`info`** : esthétique ou confort (décalage sous la cible annoncée, morceaux trop courts,
+  bande de joints alignée sur 3+ rangées). À connaître.
+
+Chaque `Diagnostic` carry un **type** (`missing` / `rip` / `stagger` / etc.), une **sévérité**,
+un **message** (texte UI), et une **région** (`region: {x, y, w, h}` en coordonnées du plan
+pièce par pièce) pour le surlignage et le zoom sur clic.
+
+### Détection de trous — rastérisation
+
+Contrairement aux contrôles de joints ou de dimensions (calculés depuis les stats), les trous
+sont détectés par **rastérisation raster** de la géométrie de couverture :
+- **`STEP = 0.5` cm** : résolution de la grille (un pixel = 0,5 × 0,5 cm).
+- **`ERODE = 3` érosions** : applique une opération morphologique pour n'accepter que les vides
+  d'au moins 3 cm d'épaisseur (filtre les joints, le jeu de dilatation, ne garde que les trous
+  vrais). Codé en Python, appelé via `child_process.spawn`.
+
+Cas d'usage : `polygon-clipping` plante sur certaines géométries dégénérées (cloisons fines,
+L-shaped rooms complexes, accumulation d'erreurs flottantes) ; la rastérisation est plus
+robuste. Mesures sur JSON réels : zéro faux positif, détection 100 % des trous > 20 cm².
+Les coordonnées de la région sont en **coordonnées de la pièce** (pas d'offset cloisons) pour
+l'affichage sur canevas.
+
+### Garde-fou `joint-flush` — régionalisation
+
+Le contrôle « joint collé » (< 0,6 cm du mur) était FAUX en chambre L : il signalait un joint
+collé À UN MUR alors qu'il était en fait à distance correcte du mur OPPOSÉ (donc recalage légitime
+d'une sous-plage). Solution : **chaque rangée est limitée à sa bande de hauteur** (`rowH`).
+Une rangée n'échange un `flush` avec sa voisine que si elle se chevauchent en Y :
+`rowH + 0.6` (au lieu d'un test global).
+
+**Impact mesuré** : suppression des faux positifs sur plans L-shaped sans dégradation des
+vrais positifs.
+
+### Banc anti-régression — `tools/bench-layout.ts`
+
+Le banc tourne 120 simulations (`--full`) sur un stock synthétique. **Garde-fou absolu** :
+`holes = 0` sur TOUS les plans. Le benchmark retourne une colonne `errors` (nombre de
+diagnostics non-`info`) pour tracer les régressions.
+
+Sur cas synthétiques sans stock (forçage de `missing`), `errors > 0` est légitime et attendu :
+c'est le plan qui le demande, pas une régression du code. Le banc PASSE si `holes = 0` et
+si `errors` ne dégradent pas le trend historique.
+
+Mettre à jour après toute modification de la pose ou de la géométrie :
+
+    npx esbuild tools/bench-layout.ts --bundle --platform=node \
+      --outfile=_b.cjs && node _b.cjs --full
+
+### UI — verdict et navigation
+
+**Banneau de verdict** (`ResultsPanel`) : bandeau vert « ✓ Plan posable » si aucun `error` /
+`warn`, orange avec compte des diagnostics par sévérité sinon. Cliquable pour ouvrir la liste.
+
+**Liste diagnostics** : chaque ligne affiche type + message + sévérité. Un clic sur un
+diagnostic appelle `focusDiagnostic(d)` → store + CanvasView.
+
+**Surlignage sur canevas** (`CanvasView`) :
+- Dashed rectangle (`strokeDasharray: '2,2'`) autour de la région du diagnostic.
+- Couleur par sévérité (red pour error, orange pour warn, blue pour info).
+- Clic sur le rectangle `focusDiagnostic(d)` et **recentre le canevas** (`view` passe à
+  center + zoom × 1,5).
+
+**Header checkbox** (`CanvasView`, onglet Rendu) : case « Vérifications » (activée par défaut)
+qui toggle l'affichage des dashed rectangles. Permet de lire le plan sans annotation.
+
+---
+
 ## Cotes automatiques (orange, face à face)
 
 - Affichées **aussi après le calepinage**. Elles étaient masquées par un `!result` : or
