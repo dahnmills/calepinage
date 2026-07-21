@@ -13,6 +13,7 @@
 import { computeLayout } from '../src/model/layout';
 import { flattenPacks } from '../src/model/stock';
 import type { LayoutConfig, PlankBatch, Point, Room } from '../src/model/types';
+import { validatePlan } from '../src/model/validate';
 
 const fs = require('fs');
 
@@ -20,6 +21,11 @@ export interface Metrics {
   planks: number;
   rows: number;
   joints: number;
+  /** Diagnostics de type 'hole' (sol non couvert). Garde-fou : doit rester à 0. */
+  holes: number;
+  /** Diagnostics de gravité error, tous types confondus. Informatif : les stocks
+   * synthétiques du banc produisent des 'missing' légitimes (stock insuffisant). */
+  errors: number;
   /** Joints trop proches d'un joint de la rangée VOISINE (règle dure). */
   viol1Pct: number;
   /** Joints à moins d'1 cm d'un joint de la rangée voisine : alignement franc. */
@@ -102,6 +108,9 @@ const jointsOf = (segs: Seg[]): number[] =>
 
 export function measure(room: Room, batches: PlankBatch[], config: LayoutConfig): Metrics {
   const res: any = computeLayout(room, batches, config);
+  const diags = validatePlan(room, res, config);
+  const holes = diags.filter((d) => d.kind === 'hole').length;
+  const errors = diags.filter((d) => d.severity === 'error').length;
   const bands = rowsOf(res.placed, config.orientationDeg);
   const rows = bands.map(jointsOf);
   const minOffset = config.minJointOffset ?? 0;
@@ -187,6 +196,8 @@ export function measure(room: Room, batches: PlankBatch[], config: LayoutConfig)
     planks: res.placed.length,
     rows: rows.filter((r) => r.length).length,
     joints,
+    holes,
+    errors,
     viol1Pct: pct(viol1, joints),
     flush1,
     align2Pct: pct(a2, a2tot),
@@ -293,7 +304,7 @@ export function runSuite(full: boolean) {
 if (require.main === module) {
   const full = process.argv.includes('--full');
   const rows = runSuite(full);
-  const cols: (keyof Metrics)[] = ['rows', 'joints', 'viol1Pct', 'flush1', 'bandMax', 'samePlank', 'align2Pct', 'repeat2Pct', 'staircase', 'medGap', 'minPiece', 'minRip', 'uncoveredM2', 'wastePct', 'cuts', 'underMinCut'];
+  const cols: (keyof Metrics)[] = ['rows', 'joints', 'holes', 'errors', 'viol1Pct', 'flush1', 'bandMax', 'samePlank', 'align2Pct', 'repeat2Pct', 'staircase', 'medGap', 'minPiece', 'minRip', 'uncoveredM2', 'wastePct', 'cuts', 'underMinCut'];
   const head = ['cas'.padEnd(28), ...cols.map((c) => String(c).padStart(10))].join(' ');
   console.log(head); console.log('-'.repeat(head.length));
   for (const r of rows) console.log([r.name.padEnd(28), ...cols.map((c) => String(r[c]).padStart(10))].join(' '));
