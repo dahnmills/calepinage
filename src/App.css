@@ -179,6 +179,28 @@ button.primary:hover { background: #1d4ed8; }
   margin-bottom: 10px;
 }
 
+/* Verdict d'un plan sain. */
+.verdict-ok {
+  background: #dcfce7;
+  border: 1px solid #86efac;
+  color: #166534;
+  border-radius: 6px;
+  padding: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+/* Liste des diagnostics : chaque ligne mène au défaut sur le plan. */
+.diag-list { list-style: none; margin: 0 0 10px; padding: 0; }
+.diag-list li {
+  display: flex; gap: 6px; align-items: baseline;
+  padding: 4px 6px; border-radius: 5px; cursor: pointer; font-size: 12px;
+}
+.diag-list li:hover { background: #f1f5f9; }
+.diag-list li.error { color: #92400e; }
+.diag-list li.warn { color: #9a3412; }
+.diag-list li.info { color: #334155; }
+
 /* Conseil sous un champ de réglage. */
 .field-hint {
   margin: -4px 0 8px;

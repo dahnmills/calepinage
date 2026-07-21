@@ -2,7 +2,7 @@ import { useStore } from '../store/useStore';
 import { packIdOf } from '../model/stock';
 
 export default function ResultsPanel() {
-  const { result, packs, config } = useStore();
+  const { result, packs, config, diagnostics, focusDiagnostic } = useStore();
   if (!result) {
     return (
       <section className="panel">
@@ -21,6 +21,33 @@ export default function ResultsPanel() {
   return (
     <section className="panel">
       <h2>Résultats</h2>
+
+      {(() => {
+        const errs = diagnostics.filter((d) => d.severity === 'error').length;
+        const others = diagnostics.length - errs;
+        if (diagnostics.length === 0) {
+          return <div className="verdict-ok">✓ Plan posable</div>;
+        }
+        const cls = errs > 0 ? 'alert' : 'note';
+        const label = errs > 0
+          ? `${errs} erreur(s) à corriger${others ? ` · ${others} à vérifier` : ''}`
+          : `Posable — ${others} point(s) à vérifier`;
+        return (
+          <>
+            <div className={cls}><b>{label}</b></div>
+            <ul className="diag-list">
+              {diagnostics.map((d, i) => (
+                <li key={i} className={d.severity}
+                    onClick={() => d.region && focusDiagnostic(d)}
+                    title={d.region ? 'Cliquer pour voir sur le plan' : undefined}>
+                  <span>{d.severity === 'error' ? '⛔' : d.severity === 'warn' ? '⚠' : 'ℹ'}</span>
+                  <span>{d.message}</span>
+                </li>
+              ))}
+            </ul>
+          </>
+        );
+      })()}
 
       {stats.missingPlanks > 0 && (
         <div className="alert">
