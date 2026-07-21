@@ -43,7 +43,7 @@ interface StartLineState {
   wall: StartWall | null;
 }
 
-export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { highlightCuts: boolean; showNumbers: boolean; showGaps: boolean }) {
+export default function CanvasView({ highlightCuts, showNumbers, showGaps, showChecks }: { highlightCuts: boolean; showNumbers: boolean; showGaps: boolean; showChecks: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const {
@@ -56,6 +56,7 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
     startMeasure, finishMeasure, cancelMeasure, removeMeasure,
     tagSpace,
     snapshot, undo, redo,
+    diagnostics, focusedDiagnostic,
   } = useStore();
   const isDrawing = tool === 'draw' || tool === 'hole' || tool === 'wall';
   // Le moteur raisonne en lots de lames ; le stock, lui, se saisit en paquets.
@@ -487,12 +488,35 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps }: { h
       if (measureStart) drawMeasure(ctx, measureStart, measurePoint(cursorCm), view, true);
       drawSnapMark(ctx, snap, view);
     }
+
+    if (showChecks) {
+      for (const d of diagnostics) {
+        if (!d.region) continue;
+        const a = worldToScreen({ x: d.region.x, y: d.region.y }, view);
+        const b = worldToScreen({ x: d.region.x + d.region.w, y: d.region.y + d.region.h }, view);
+        const col = d.severity === 'error' ? '#dc2626' : d.severity === 'warn' ? '#d97706' : '#eab308';
+        ctx.save();
+        ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.setLineDash([6, 4]);
+        ctx.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y);
+        ctx.setLineDash([]);
+        ctx.restore();
+      }
+    }
     } catch (err) {
       // Une frame qui échoue (géométrie dégénérée le temps d'un tracé) ne doit pas tuer
       // l'app : on logge et on laisse le prochain rendu repartir proprement.
       console.error('[calepinage] échec de rendu du plan :', err);
     }
-  }, [size, view, result, room, drawing, highlightCuts, showNumbers, showGaps, tool, isDrawing, editor, config, preview, hoverVertex, selectedVertex, selectedEl, cursorCm, startShown, startGhost, frameFor, measures, measureStart, snapMeasure, axisLock, spaces, pickedSpace]);
+  }, [size, view, result, room, drawing, highlightCuts, showNumbers, showGaps, tool, isDrawing, editor, config, preview, hoverVertex, selectedVertex, selectedEl, cursorCm, startShown, startGhost, frameFor, measures, measureStart, snapMeasure, axisLock, spaces, pickedSpace, diagnostics, showChecks]);
+
+  useEffect(() => {
+    const d = focusedDiagnostic;
+    if (!d?.region) return;
+    const pad = 80;
+    const w = Math.max(d.region.w, 20), h = Math.max(d.region.h, 20);
+    const scale = Math.min((size.w - pad * 2) / w, (size.h - pad * 2) / h);
+    setView({ scale, ox: d.region.x - pad / scale, oy: d.region.y - pad / scale });
+  }, [focusedDiagnostic, size]);
 
   // Pose d'une porte : sur le mur OU la cloison la plus proche, la plus proche gagne.
   const placeDoor = (w: Point) => {
