@@ -239,7 +239,12 @@ export function computeLayout(room: Room, batches: PlankBatch[], config: LayoutC
     const isRipped = clipped < pl.width - ripTol;
     // Une lame dont la surface visible est plus petite que son rectangle (encoche autour
     // d'un îlot, d'un angle de cloison) est bel et bien découpée, même à cote « pleine ».
-    const notched = visibleArea < pl.length * pl.width - Math.max(2, pl.width) - 1e-3;
+    // Encoche = coupe en L autour d'un coin (cloison, îlot). On ne la compte QUE si elle
+    // retire une part RÉELLE de la lame : un simple frôlement de cloison qui grignote
+    // quelques cm² ne fait pas d'une lame pleine une « lame découpée » (bug signalé : une
+    // 80×12 pleine était marquée coupée). Seuil = 5 % de l'aire, ou ~2,5 largeurs de lame.
+    const rectArea = pl.length * pl.width;
+    const notched = visibleArea < rectArea - Math.max(poseWidth * 2.5, rectArea * 0.05) - 1e-3;
     // Coupée EN LONGUEUR seulement si le morceau est plus court que la lame STOCK dont il
     // vient. L'ancien `pl.isCut` marquait à tort des lames ENTIÈRES : une lame pleine qui
     // bute contre une cloison (`hitsCloison`) ou dont la place tombait pile sur une longueur
