@@ -209,7 +209,37 @@ export function computeLayout(room: Room, batches: PlankBatch[], config: LayoutC
     if (len <= 1e-3) return 0;
     return Math.min(pl.width, pl.pieces.reduce((s, pc) => s + polygonArea(pc), 0) / len);
   };
-  const skinny = (pl: (typeof placedCentered)[number]) => widthOf(pl) < sliverMax - 1e-6;
+
+  // Un filet plus étroit que la largeur mini est PARFOIS supprimable, PARFOIS non — tout
+  // dépend de ce qui le rogne. S'il est rogné par une CLOISON intérieure (sa partie
+  // manquante tombe DANS la pièce, sous la cloison), c'est un filet parasite : la base de
+  // la cloison le couvre, on l'écarte. S'il est rogné par un MUR extérieur (partie manquante
+  // HORS de la pièce), le supprimer laisserait un vide visible contre le mur (bug du filet
+  // de 2,7 cm) — on le garde. On échantillonne la partie non visible du rect et on regarde
+  // de quel côté elle tombe.
+  const roomPoly = room.points;
+  const roomHoles = room.holes ?? [];
+  const inRoom = (p: Point) => pointInPolygon(p, roomPoly) && !roomHoles.some((h) => pointInPolygon(p, h));
+  const againstPartition = (pl: (typeof placedCentered)[number]) => {
+    if ((room.partitions?.length ?? 0) === 0) return false;
+    const xs = pl.rect.map((p) => p.x), ys = pl.rect.map((p) => p.y);
+    const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+    let interior = 0, exterior = 0; // partie manquante DANS la pièce vs HORS
+    const N = 8;
+    for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
+      const p = { x: x0 + ((i + 0.5) / N) * (x1 - x0), y: y0 + ((j + 0.5) / N) * (y1 - y0) };
+      if (pl.pieces.some((pc) => pointInPolygon(p, pc))) continue; // partie VISIBLE, on ignore
+      if (inRoom(shift(p))) interior++; else exterior++;           // partie manquante
+    }
+    return interior > exterior; // rognée surtout par une cloison (dans la pièce)
+  };
+
+  const skinny = (pl: (typeof placedCentered)[number]) => {
+    const w = widthOf(pl);
+    if (w < sliverMax - 1e-6) return true;              // tient dans le jeu de dilatation
+    if (w >= minRip - 1e-6) return false;               // assez large : on garde
+    return againstPartition(pl);                        // filet < minRip : seulement si cloison
+  };
   const droppedSlivers = placedCentered.filter(skinny).length;
   // Refends plus étroits que le minimum souhaité mais POSÉS quand même : on ne les cache
   // pas, on les compte, pour que l'utilisateur sache ce qu'il devra tailler.
