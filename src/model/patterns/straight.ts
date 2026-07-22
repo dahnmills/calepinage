@@ -2,18 +2,6 @@ import type { LayoutConfig, PlacedPlank, Point } from '../types';
 import type { Inventory } from '../inventory';
 import { clipRectToRoom, polygonBBox, rotate, type RoomClipper } from '../geometry';
 
-/** RNG déterministe (mulberry32) pour le décalage aléatoire reproductible. */
-function mulberry32(seed: number) {
-  let a = seed >>> 0;
-  return () => {
-    a |= 0;
-    a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
 export interface PatternInput {
   /** Découpe de la pièce, DÉJÀ dans le repère de pose (tourné de -orientation). */
   clipper: RoomClipper;
@@ -59,8 +47,8 @@ function mergeRuns(pieces: Point[][], gap: number): { start: number; end: number
  * puis retransforme chaque lame dans le repère PIÈCE via `orientationDeg`.
  */
 export function generateStraight(input: PatternInput): PlacedPlank[] {
-  const { clipper, config, inventory, poseWidth, nominalLength, optimizeStart, startLineY } = input;
-  const { jointGap, orientationDeg, seed } = config;
+  const { clipper, config, inventory, poseWidth, optimizeStart, startLineY } = input;
+  const { jointGap, orientationDeg } = config;
 
   // BBox de la pièce dans le repère de pose.
   const allPts = clipper.convex ? clipper.poly : clipper.triangles.flat();
@@ -108,12 +96,6 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
   const minOffset = Math.max(0, config.minJointOffset ?? 0);
   /** Marge anti joint en « H » entre rangées n et n+2 (NWFA). */
   const H_JOINT_MIN = 10;
-  /** Découpages tirés au sort par plage avant d'en retenir un. Réglé au banc de mesure. */
-  const RUN_ATTEMPTS = 12;
-  /** Essais supplémentaires sur une plage où la contrainte ne passe pas du premier coup. */
-  const RUN_ATTEMPTS_HARD = 60;
-  /** En deçà de cet écart, deux joints se lisent comme « côte à côte » : on répare. */
-  const REPAIR_BELOW = 6; // retenu au banc : −82 % de joints collés pour +0,2 pt de fautes
   /**
    * Coût d'un joint de plus dans une plage. Moins de joints = décalage plus facile à tenir
    * ET rendu plus calme. Valeur retenue au banc (600 simulations) : meilleure sur tous les
@@ -122,8 +104,6 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
   const JOINT_PENALTY = 60;
   /** Écart réellement obtenu sur chaque plage, pour pouvoir dire ce qu'on a vraiment tenu. */
   const achievedGaps: number[] = [];
-  /** Écart de note en deçà duquel deux longueurs sont jugées équivalentes (exploration). */
-  const EXPLORE_MARGIN = 30;
 
   /** Écart SIGNÉ au joint voisin le plus proche : le signe porte le sens de l'escalier. */
   const signedGapTo = (x: number, l: number, joints: number[]): number => {
@@ -152,232 +132,154 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
    * de chaque côté, la plus proche pesant le plus), et l'on retient la mieux placée.
    * À qualité égale, la lame la plus longue gagne : moins de coupes, moins de chutes.
    */
-  /**
-   * `room` = ce qui tient dans la cellule courante (plafonné à la longueur nominale).
-   * `avail` = matière CONTINUE restante jusqu'au bout de la plage (mur du fond ou cloison).
-   * Le reste doit se juger sur `avail` : mesuré sur la cellule, il déclarait posable un
-   * reliquat qui, une fois la rangée poursuivie, finissait en bout de 8 cm.
-   */
-  const chooseLength = (
-    x: number, room: number, avail: number, near: number[], far: number[], prevDrift: number,
-    live: number[], draw: () => number, off: number,
-  ): number => {
-    // `live` = longueurs disponibles dans la SIMULATION en cours, pas dans le stock réel :
-    // une plage se planifie entièrement avant d'être posée, sinon on ne peut pas la noter.
-    // Une lame ne peut pas dépasser la place restante ; et si elle laisse un reste plus
-    // court que la coupe minimale, ce reste serait inposable — on l'écarte.
-    const stock = live.filter((l) => {
-      if (l < minCut || l > room + tol) return false;
-      const rest = avail - l;
-      return rest <= tol || rest >= minCut;
-    });
-    if (stock.length === 0) return room; // rien ne convient : on comble en coupant
-
-    // Au-delà de ce seuil, un joint est « bien écarté » : inutile de chercher mieux, sinon
-    // on n'utiliserait plus qu'une seule longueur et le calepinage deviendrait monotone.
-    const enough = Math.max(off, 1) * 1.5;
-    const score = (l: number) => {
-      // La dernière lame bute sur le mur : sa fin n'est pas un joint, elle ne gêne personne.
-      if (avail - l <= tol) return 5 + l * 0.05;
-
-      const dNear = Math.min(gapTo(x, l, near), enough);
-      const dFar = gapTo(x, l, far);
-      // Un joint sous le décalage minimal est une faute : on la sanctionne lourdement.
-      const fault = dNear < off - 1e-6 ? -1000 + dNear * 10 : dNear * 3;
-      // Un joint aligné avec celui d'une rangée sur deux dessine un escalier régulier :
-      // c'est le défaut qu'on voit le plus sur un plancher, il faut le casser aussi.
-      const stair = dFar < 10 ? -300 + dFar * 4 : Math.min(dFar, enough);
-      // ESCALIER. Prendre à chaque rangée le même décalage dans le même sens dessine des
-      // marches régulières en travers du plancher : conforme à la règle du décalage
-      // minimal, et pourtant proscrit (NWFA : « avoid blatant stair-steps or equal
-      // end-joint offsets in sequential rows »). On sanctionne donc le décalage qui
-      // REPRODUIT celui de la rangée précédente, signe compris.
-      const drift = signedGapTo(x, l, near);
-      const steps = Number.isFinite(prevDrift) && Number.isFinite(drift)
-        && Math.abs(drift - prevDrift) < 4 && Math.abs(drift) > 5 ? -120 : 0;
-      // Un soupçon d'aléa (déterministe : même graine, même plan) départage les longueurs
-      // équivalentes. Sans lui, les mêmes choix reviennent et le calepinage se met à rimer.
-      return fault + stair + steps + l * 0.05 + draw() * 4;
-    };
-
-    /**
-     * Un choix glouton se piège lui-même : une première lame qui tombe bien peut ne laisser
-     * AUCUNE longueur acceptable pour la suivante, et la rangée finit avec un joint fautif.
-     * On regarde donc un cran plus loin — la lame retenue doit laisser une suite jouable.
-     */
-    // Anticipation d'UN cran. Deux crans ont été essayés et mesurés : aucun gain global
-    // (5,6 % → 5,7 % de joints fautifs sur 120 simulations) pour davantage de chute. Le
-    // blocage restant n'est pas là — voir DEV_NOTES.
-    const leavesAWay = (l: number): boolean => {
-      const rest = avail - l;
-      if (rest <= tol) return true; // cette lame ferme la rangée : rien après elle
-      const x2 = x + l + jointGap;
-      return stock.some((l2) => {
-        if (l2 > rest + tol) return false;
-        if (rest - l2 > tol && rest - l2 < minCut) return false; // laisserait un bout inposable
-        if (rest - l2 <= tol) return true; // l2 ferme la rangée contre le mur
-        return gapTo(x2, l2, near) >= off - 1e-6;
-      });
-    };
-
-    // On ne prend PAS systématiquement le meilleur : on tire au sort parmi les choix
-    // quasi équivalents. Sans cette exploration, les essais successifs d'une même plage
-    // redonnent tous le même découpage et la recherche locale ne cherche rien. La marge
-    // reste bien inférieure à la pénalité de faute (−1000) : un choix fautif ne peut pas
-    // entrer dans le tirage.
-    const scored = stock.map((l) => ({ l, sc: score(l) + (leavesAWay(l) ? 0 : -500) }));
-    const top = Math.max(...scored.map((c) => c.sc));
-    const pool = scored.filter((c) => c.sc >= top - EXPLORE_MARGIN);
-    return pool[Math.min(pool.length - 1, Math.floor(draw() * pool.length))].l;
-  };
-
-  /**
-   * Dernier recours quand aucune lame du stock ne convient : on coupe pour écarter le joint,
-   * mais jamais pour gagner trois centimètres — la coupe doit valoir le trait de scie.
-   */
-  const fixJoint = (
-    x: number, len: number, maxLen: number, avail: number, neighbours: number[], second: number[],
-    off: number,
-  ): number => {
-    if (off <= 0 || (neighbours.length === 0 && second.length === 0)) return len;
-    // Joint en « H » : deux joints alignés de part et d'autre d'UNE rangée (n et n+2).
-    // Absent du DTU mais explicitement proscrit par les guidelines NWFA (« avoid H
-    // patterns »), avec ~10 cm de marge. `fixJoint` ne regardait que la voisine immédiate :
-    // dès qu'elle était satisfaite il ne coupait plus, et la rangée reproduisait la n−2.
-    const secondMin = Math.min(off, H_JOINT_MIN);
-    // Une lame qui ferme la rangée bute sur le mur : sa fin n'est pas un joint, elle ne
-    // gêne personne et n'a aucune raison d'être recoupée.
-    const closesRow = (l: number) => avail - l <= tol;
-    const hitsNear = (l: number) => !closesRow(l) && gapTo(x, l, neighbours) < off - 1e-6;
-    const hitsSecond = (l: number) => !closesRow(l) && gapTo(x, l, second) < secondMin - 1e-6;
-    if (!hitsNear(len) && !hitsSecond(len)) return len;
-
-    // Chaque joint voisin interdit une plage de ±minOffset autour de lui. On cherche donc
-    // la longueur autorisée la PLUS PROCHE de celle qu'on voulait, en testant les bords de
-    // ces plages interdites — et pas seulement « pile à minOffset d'un joint », car un tel
-    // point tombe souvent dans la plage interdite d'un AUTRE joint et se faisait éliminer,
-    // ne laissant aucun candidat : la lame restait alors fautive.
-    const cand = [len, minCut, maxLen];
-    for (const j of neighbours) cand.push(j - off - x, j + off - x);
-    for (const j of second) cand.push(j - secondMin - x, j + secondMin - x);
-    const placeable = cand
-      .map((l) => Math.round(l * 10) / 10) // au millimètre : pas de cote biscornue
-      .filter((l) => {
-        if (l < minCut - 1e-6 || l > maxLen + 1e-6) return false;
-        // Le reste doit rester posable, sinon on déplace le problème sur la lame suivante.
-        const rest = avail - l;
-        return rest <= tol || rest >= minCut;
-      })
-      .sort((a, b) => Math.abs(a - len) - Math.abs(b - len));
-
-    // Deux rangs de priorité, jamais mélangés : la voisine immédiate est une RÈGLE, la
-    // rangée n±2 une PRÉFÉRENCE. Les traiter à égalité faisait sacrifier la première pour
-    // satisfaire la seconde — on cassait l'appareil en brique en créant de vraies fautes.
-    const both = placeable.filter((l) => !hitsNear(l) && !hitsSecond(l));
-    if (both.length) return both[0];
-    const nearOnly = placeable.filter((l) => !hitsNear(l));
-    return nearOnly[0] ?? len;
-  };
-
-  /**
-   * Découpage d'une plage entière, SIMULÉ sur une copie du stock.
-   *
-   * Le glouton décide lame par lame et ne revient jamais en arrière : sur une plage courte
-   * — un couloir de 250 cm entre deux cloisons — le premier choix condamne la suite, et la
-   * plage finit avec des joints collés à ceux de la rangée voisine. C'est là que se
-   * concentraient les fautes restantes (55 % sur les plages de ~250 cm).
-   *
-   * On tire donc plusieurs découpages au sort, on NOTE la plage entière, et on garde la
-   * meilleure : une recherche locale, comme le poseur qui présente sa rangée à sec avant
-   * de clouer (le « racking » des guidelines NWFA). Rien n'est consommé ici — la simulation
-   * travaille sur une copie des quantités, sinon elle réutiliserait dix fois la dernière
-   * lame de 160.
-   */
-  const planRun = (
-    runStart: number, runEnd: number, near: number[], far: number[], prevDrift: number,
-    draw: () => number, off: number,
-  ): number[] => {
-    const { counts } = inventory.availableCounts(poseWidth);
-    const stockLens = [...counts.keys()].sort((a, b) => b - a);
-    const take = (l: number): void => {
-      const n = counts.get(l) ?? 0;
-      if (n > 0) { counts.set(l, n - 1); return; }
-      // Pas cette cote en stock : on entame la plus courte lame qui la couvre, le reste
-      // retourne au pool de chutes — exactement ce que fera `Inventory.request`.
-      const src = stockLens.filter((s) => (counts.get(s) ?? 0) > 0 && s > l).pop();
-      if (src == null) return;
-      counts.set(src, (counts.get(src) ?? 0) - 1);
-      const rest = src - l - jointGap;
-      if (rest >= minCut) counts.set(rest, (counts.get(rest) ?? 0) + 1);
-    };
-
-    const out: number[] = [];
-    let x = runStart;
-    let guard = 0;
-    // S'arrêter dans la TOLÉRANCE de coupe : un reliquat de 8 mm n'est pas une lame à
-    // poser, c'est du bruit numérique. La boucle s'arrêtait à 1e-3, donc elle posait des
-    // lames de 0,8 cm en bout de plage — invisibles comme lames, mais elles créaient un
-    // faux joint collé à celui de la rangée voisine.
-    while (x < runEnd - Math.max(tol, 1e-3) && guard++ < 5000) {
-      const avail = runEnd - x;
-      const live = [...counts.entries()].filter(([, n]) => n > 0).map(([l]) => l);
-      const longest = live.length ? Math.max(...live) : nominalLength;
-      const room = Math.min(avail, longest);
-      const pick = chooseLength(x, room, avail, near, far, prevDrift, live, draw, off);
-      const want = fixJoint(x, Math.min(pick, room), room, avail, near, far, off);
-      const len = Math.min(avail, Math.max(want, Math.min(minCut, avail)));
-      if (len <= 1e-3) break;
-      take(len);
-      out.push(len);
-      x += len + jointGap;
+  /** Pénalité d'un joint à la position absolue `P` (plus c'est haut, pire c'est). */
+  // Grille de phase (période première aux longueurs de stock 60/80/90 → pas de résonance).
+  const PHASE_PERIOD = 47;
+  const jointCost = (P: number, near: number[], far: number[], off: number, phase: number): number => {
+    let c = JOINT_PENALTY; // chaque joint de plus coûte : on préfère les lames longues
+    let gN = Infinity;
+    for (const j of near) gN = Math.min(gN, Math.abs(P - j));
+    if (Number.isFinite(gN)) {
+      if (gN < off - 1e-6) c += 1000 + (off - gN) * 20; // faute : joint trop près de la voisine
+      else c -= Math.min(gN, off * 1.5) * 2;            // récompense un bon écart
     }
-    // Talon plus court que la coupe minimale : on l'absorbe dans la lame précédente
-    // plutôt que de le poser. Une lame de 8 mm ne se pose pas.
-    while (out.length >= 2 && out[out.length - 1] < minCut - 1e-6) {
-      const tail = out.pop() as number;
-      out[out.length - 1] += tail + jointGap;
-    }
-    return out;
+    let gF = Infinity;
+    for (const j of far) gF = Math.min(gF, Math.abs(P - j));
+    if (Number.isFinite(gF) && gF < H_JOINT_MIN - 1e-6) c += 200; // joint en « H » (n±2)
+    // Biais de phase PAR RANGÉE : départage les séquences à coût égal pour que deux rangées
+    // de longueur identique (near vide) ne convergent pas sur les MÊMES joints (bande alignée).
+    // Poids faible (0,35) : brise la symétrie sans jamais renverser un vrai écart de décalage.
+    const d = Math.abs(((P - phase) % PHASE_PERIOD + PHASE_PERIOD + PHASE_PERIOD / 2) % PHASE_PERIOD - PHASE_PERIOD / 2);
+    c += d * 0.8;
+    return c;
   };
 
   /**
-   * RÉPARATION CIBLÉE d'une plage. Quand un joint reste trop près de la rangée voisine, on
-   * ne retire pas au sort : on déplace CE joint, en rééquilibrant les deux lames qui
-   * l'encadrent, vers la position qui maximise l'écart. Les tirages aléatoires laissaient
-   * un joint à 0 cm là où un écart de 15 cm existait — parce qu'ils cherchaient partout au
-   * lieu de corriger le point précis qui pose problème.
+   * SOLVEUR par programmation dynamique. Trouve la séquence de lames qui minimise le coût
+   * total des joints, avec une règle dure : toutes les lames SAUF la dernière sont ENTIÈRES
+   * (longueurs qui existent en stock/chute) — jamais de coupe en plein champ. Seule la
+   * dernière lame comble jusqu'au mur (coupe au bord). Contrairement au glouton, le DP
+   * regarde toute la rangée d'un coup : il obtient à la fois le milieu entier ET le meilleur
+   * décalage, là où les approches gloutonnes sacrifiaient l'un pour l'autre.
    */
-  const repairRun = (
-    runStart: number, runEnd: number, lens: number[], near: number[], off: number,
+  const planRunDP = (
+    runStart: number, runEnd: number, near: number[], far: number[], off: number,
+    phase: number,
   ): number[] => {
-    if (!near.length || lens.length < 2) return lens;
-    const out = lens.slice();
-    let x = runStart;
-    for (let i = 0; i < out.length - 1; i++) {
-      const jointX = x + out[i];
-      // Une lame qui ferme la plage bute sur un mur : sa fin n'est pas un joint.
-      if (runEnd - jointX <= tol) { x += out[i] + jointGap; continue; }
-      // On ne répare QUE les joints vraiment collés. Corriger aussi ceux qui sont juste
-      // sous la règle a été mesuré : le déplacement modifie la lame suivante, donc les
-      // joints que la rangée d'après devra éviter, et l'ensemble se dégrade (5 % → 10 %
-      // de joints sous la cible). Ici on ne vise que le défaut visible à l'œil.
-      if (gapTo(x, out[i], near) >= REPAIR_BELOW - 1e-6) { x += out[i] + jointGap; continue; }
+    const T = runEnd - runStart;
+    if (T < minCut) return T > tol ? [T] : [];
+    const wholes = inventory.availableLengths(poseWidth).filter((l) => l >= minCut - 1e-6);
+    if (!wholes.length) return [T]; // rien en stock : on comble d'un tenant
+    const maxWhole = Math.max(...wholes); // la dernière lame doit être COUPABLE dans une lame
+    // CONSCIENCE DES QUANTITÉS : le DP minimise le nombre de joints, donc préfère les lames
+    // LES PLUS LONGUES — or ce sont souvent les plus rares (2 lames de 120 pour tout un
+    // plancher). Il en planifiait plus qu'il n'en existe ; la passe d'affectation, à court de
+    // 120, coupait alors une lame plus longue EN PLEIN MILIEU. On pénalise donc chaque
+    // longueur à proportion de sa rareté : le DP étale l'usage vers les lames abondantes et
+    // n'épuise plus le stock rare. Les chutes (réutilisables, la cascade) sont épargnées.
+    const { counts, offcuts: offSet } = inventory.availableCounts(poseWidth);
+    const scarcity = (L: number): number => {
+      for (const o of offSet) if (Math.abs(o - L) <= tol) return 0; // chute : réemploi encouragé
+      let n = 0;
+      for (const [len, c] of counts) if (Math.abs(len - L) <= tol) n += c;
+      if (n <= 0) return 0;
+      return Math.min(40, 40 / n); // n=1→40, n=2→20, n=10→4, n=80→0,5
+    };
+    const key = (x: number) => Math.round(x * 10);
+    // dp : position cumulée (un bord de lame) -> {coût mini, longueur de la lame qui y mène, x précédent}
+    const dp = new Map<number, { cost: number; len: number; prev: number }>();
+    dp.set(key(0), { cost: 0, len: 0, prev: -1 });
+    const order = [0]; // positions à traiter, dans l'ordre croissant
+    let best: { cost: number; end: number } | null = null;
 
-      // Les deux lames encadrantes couvrent une longueur fixe : on ne déplace QUE leur
-      // frontière, donc rien en amont ni en aval n'est touché.
-      const span = out[i] + jointGap + out[i + 1];
-      let bestLen = out[i];
-      let bestGap = gapTo(x, out[i], near);
-      for (let c = minCut; c <= span - jointGap - minCut + 1e-6; c += 0.5) {
-        const g = gapTo(x, c, near);
-        if (g > bestGap + 1e-6) { bestGap = g; bestLen = Math.round(c * 10) / 10; }
-        if (bestGap >= off) break; // inutile de chercher au-delà de la règle
+    // STARTER COUPÉ EN CASCADE (règle du métier, NF DTU 51.11 « coupe perdue ») : le premier
+    // morceau de la rangée peut être une COUPE (pas une lame entière), pour décaler le premier
+    // joint là où aucune combinaison de lames entières ne le permet — typiquement un stock
+    // uniforme (que des 120), où toute rangée en lames pleines s'aligne fatalement. Le bout
+    // coupé n'est pas perdu : la passe d'affectation le sert depuis le pool de chutes (le reste
+    // du bout de la rangée précédente). C'est la SEULE façon de décaler SANS couper au milieu.
+    const STARTER_CUT = 22; // coût modéré : starter bien placé bat une lame pleine alignée
+    const starterCands = (): number[] => {
+      if (!Number.isFinite(off)) return [];
+      const smax = Math.min(maxWhole, T - minCut);
+      const cand = new Set<number>();
+      for (const j of near) {
+        for (const s of [j - runStart + off, j - runStart - off]) {
+          if (s >= minCut - 1e-6 && s <= smax + 1e-6) cand.add(Math.round(s * 10) / 10);
+        }
       }
-      out[i] = bestLen;
-      out[i + 1] = span - jointGap - bestLen;
-      x += out[i] + jointGap;
+      if (!near.length) {
+        const s = minCut + (phase % Math.max(1, Math.round(smax - minCut)));
+        if (s >= minCut - 1e-6 && s <= smax + 1e-6) cand.add(Math.round(s * 10) / 10);
+      }
+      // Jamais une longueur de stock (ce serait une lame pleine, déjà couverte par le milieu).
+      return [...cand].filter((s) => !wholes.some((l) => Math.abs(l - s) <= tol));
+    };
+    for (let qi = 0; qi < order.length && qi < 20000; qi++) {
+      const x = order[qi];
+      const node = dp.get(key(x));
+      if (!node) continue;
+      const rem = T - x;
+      // TERMINAISON : la dernière lame comble de x jusqu'au mur (rem). Coupe au bord, ou
+      // lame entière si rem tombe pile sur une longueur stock. Pas de joint (mur).
+      // rem DOIT être coupable dans une seule lame (≤ maxWhole) : sinon on terminerait avec
+      // une lame de 340 cm impossible, et le placement se rabattrait sur un remplissage
+      // glouton non décalé (c'était la cause des joints alignés du DP).
+      if ((rem >= minCut - 1e-6 && rem <= maxWhole + tol) || rem <= tol) {
+        const closeCut = wholes.some((l) => Math.abs(l - rem) <= tol) ? 0 : 30; // préférer fermer entier
+        const total = node.cost + closeCut;
+        if (!best || total < best.cost) best = { cost: total, end: x };
+      }
+      // DÉPART DE RANGÉE : en plus des lames entières, on autorise un STARTER COUPÉ (première
+      // lame non entière) pour décaler le premier joint là où les lames pleines s'alignent.
+      if (x === 0) {
+        for (const s of starterCands()) {
+          const after = rem - s;
+          if (after > tol && after < minCut - 1e-6) continue;
+          const nx = s + jointGap;
+          if (nx > T + tol) continue;
+          const jc = after <= tol ? 0 : jointCost(runStart + s, near, far, off, phase);
+          const nc = node.cost + jc + STARTER_CUT;
+          const k = key(nx);
+          const cur = dp.get(k);
+          if (!cur || nc < cur.cost) {
+            if (!cur) order.push(nx);
+            dp.set(k, { cost: nc, len: s, prev: x });
+          }
+        }
+      }
+      // MILIEU : poser une lame ENTIÈRE L, joint créé à runStart+x+L, il faut laisser un
+      // reste posable (≥ minCut) OU fermer la plage (rem-L ≤ tol → traité en terminaison).
+      for (const L of wholes) {
+        const after = rem - L;
+        if (L > rem + tol) continue;
+        if (after > tol && after < minCut - 1e-6) continue; // laisserait un talon inposable
+        const nx = x + L + jointGap;
+        if (nx > T + tol) continue;
+        const jc = after <= tol ? 0 : jointCost(runStart + x + L, near, far, off, phase); // ferme => pas de joint
+        const nc = node.cost + jc + scarcity(L);
+        const k = key(nx);
+        const cur = dp.get(k);
+        if (!cur || nc < cur.cost) {
+          if (!cur) order.push(nx);
+          dp.set(k, { cost: nc, len: L, prev: x });
+        }
+      }
     }
-    return out;
+    if (!best) return [T];
+    // Reconstruction depuis le meilleur point de terminaison.
+    const lens: number[] = [];
+    let x = best.end;
+    const rem = T - x;
+    if (rem > tol) lens.push(rem); // dernière lame (coupe au bord ou entière)
+    while (x > tol) {
+      const node = dp.get(key(x));
+      if (!node || node.prev < 0) break;
+      lens.push(node.len);
+      x = node.prev;
+    }
+    lens.reverse();
+    return lens.filter((l) => l > tol);
   };
 
   /** Note une plage découpée : plus c'est haut, meilleur c'est. */
@@ -449,6 +351,9 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
     const prevDrift = driftByRow.get(rowKey(rowTop - rowStep))
       ?? driftByRow.get(rowKey(rowTop + rowStep))
       ?? Infinity;
+    // Phase de rangée : biais faible qui varie d'une rangée à l'autre (17 coprime à 47),
+    // pour casser la symétrie du DP déterministe (rangées identiques → bande alignée).
+    const phase = ((rowKey(rowTop) * 17) % PHASE_PERIOD + PHASE_PERIOD) % PHASE_PERIOD;
 
     // Plages de matière CONTINUE de la rangée ENTIÈRE, calculées une fois.
     //
@@ -484,49 +389,16 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
       // essayé et mesuré, et c'est pire (11,3 % de joints sous la valeur demandée contre
       // 5,2 %) — toute la rangée se rabat sur le seuil dégradé, y compris là où le décalage
       // demandé passait. On garde donc la cible et on classe les découpages par : d'abord
-      // le moins de fautes, puis le PLUS GRAND écart minimal (max-min), puis la note. Là où
-      // c'est faisable on obtient la valeur demandée ; là où ça ne l'est pas, on obtient le
-      // meilleur écart possible, jamais un joint collé.
-      let bestLens: number[] = [];
-      let bestViol = Infinity;
-      let bestGap = -Infinity;
-      let bestScore = -Infinity;
-      // Effort ADAPTATIF : 12 essais suffisent partout où la contrainte passe. Là où elle
-      // coince, ils ne suffisent pas — et c'est exactement là que ça compte, car le plan
-      // se rabattait alors sur un joint à 0 cm quand un joint à 15 existait. On insiste
-      // donc uniquement sur les plages difficiles ; ailleurs on s'arrête tôt.
-      let attempts = RUN_ATTEMPTS;
-      for (let attempt = 0; attempt < attempts; attempt++) {
-        if (attempt === RUN_ATTEMPTS - 1 && bestViol > 0) attempts = RUN_ATTEMPTS_HARD;
-        // Graine dérivée de la position : même plan pour la même graine de projet.
-        const draw = mulberry32(seed + rowKey(rowTop) * 131 + ri * 17 + attempt * 7919);
-        const lens = planRun(run.start, run.end, near, far, prevDrift, draw, minOffset);
-        if (!lens.length) continue;
-        const r = scoreRun(
-          run.start, run.end, lens, near, far, prevDrift, offcuts.has(lens[0]), minOffset,
-        );
-        const better = r.violations < bestViol
-          || (r.violations === bestViol && r.minGap > bestGap + 1e-6)
-          || (r.violations === bestViol && Math.abs(r.minGap - bestGap) <= 1e-6 && r.score > bestScore);
-        if (better) {
-          bestViol = r.violations; bestGap = r.minGap; bestScore = r.score; bestLens = lens;
-        }
-      }
+      // SOLVEUR DP : déterministe, il trouve directement la meilleure séquence de lames
+      // ENTIÈRES au milieu (coupe seulement en RIVE — début et fin de rangée). Plus de
+      // tirages aléatoires, plus de `repairRun` (qui recoupait au milieu). Le DP regarde
+      // toute la plage d'un coup : il obtient le décalage ET les coupes en rive à la fois.
+      const bestLens = planRunDP(run.start, run.end, near, far, minOffset, phase);
       if (!bestLens.length) continue;
-      if (bestGap < REPAIR_BELOW) {
-        // Il reste des joints trop proches : on les déplace un par un plutôt que de
-        // relancer des tirages, qui cherchent partout sauf là où ça coince.
-        const fixed = repairRun(run.start, run.end, bestLens, near, minOffset);
-        const r = scoreRun(
-          run.start, run.end, fixed, near, far, prevDrift, offcuts.has(fixed[0]), minOffset,
-        );
-        // On n'accepte la réparation que si elle N'AGGRAVE RIEN : déplacer un joint change
-        // la lame suivante, donc le joint suivant. Sans cette garde, on supprimait un joint
-        // collé en en créant deux autres juste sous la règle.
-        if (r.violations <= bestViol && r.minGap > bestGap + 1e-6) {
-          bestLens = fixed; bestViol = r.violations; bestGap = r.minGap;
-        }
-      }
+      // On relève l'écart minimal réellement obtenu, pour pouvoir dire ce qu'on a tenu.
+      const bestGap = scoreRun(
+        run.start, run.end, bestLens, near, far, prevDrift, offcuts.has(bestLens[0]), minOffset,
+      ).minGap;
       if (Number.isFinite(bestGap) && bestGap > 0) achievedGaps.push(bestGap);
 
       let x = run.start;
