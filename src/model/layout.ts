@@ -147,6 +147,8 @@ export function computeLayout(room: Room, batches: PlankBatch[], config: LayoutC
   }
 
   const batchTexture = new Map(batches.map((b) => [b.id, b.texture] as const));
+  // Longueur STOCK de chaque lot : sert à dire si une lame a VRAIMENT été raccourcie.
+  const batchLen = new Map(batches.map((b) => [b.id, b.length] as const));
   const shift = (p: Point): Point => ({ x: p.x + center.x, y: p.y + center.y });
   // Compte les morceaux par lame physique pour décider du suffixe (A/B/C).
   const piecesPerPlank = new Map<number, number>();
@@ -238,6 +240,13 @@ export function computeLayout(room: Room, batches: PlankBatch[], config: LayoutC
     // Une lame dont la surface visible est plus petite que son rectangle (encoche autour
     // d'un îlot, d'un angle de cloison) est bel et bien découpée, même à cote « pleine ».
     const notched = visibleArea < pl.length * pl.width - Math.max(2, pl.width) - 1e-3;
+    // Coupée EN LONGUEUR seulement si le morceau est plus court que la lame STOCK dont il
+    // vient. L'ancien `pl.isCut` marquait à tort des lames ENTIÈRES : une lame pleine qui
+    // bute contre une cloison (`hitsCloison`) ou dont la place tombait pile sur une longueur
+    // stock passait pour « découpée » alors qu'aucun trait de scie n'est nécessaire.
+    // On juge donc sur la vraie longueur d'origine.
+    const stockLen = batchLen.get(pl.sourceBatchId) ?? pl.length;
+    const lengthCut = usedLength < stockLen - Math.max(ripTol, 0.5);
     return {
       ...pl,
       packNo,
@@ -250,7 +259,7 @@ export function computeLayout(room: Room, batches: PlankBatch[], config: LayoutC
       // millimètres que personne ne scie.
       usedWidth: isRipped ? clipped : pl.width,
       isRipped,
-      isCut: pl.isCut || isRipped || notched,
+      isCut: lengthCut || isRipped || notched,
     };
   });
   const ripCuts = placed.filter((pl) => pl.isRipped).length;

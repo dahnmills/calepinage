@@ -807,7 +807,9 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps, showC
           const b = batches.find((x) => x.id === pl.sourceBatchId);
           setPickedPlank({
             label: pl.label, length: +pl.usedLength.toFixed(1), width: pl.width,
-            nominalLength: +pl.length.toFixed(1),
+            // Longueur STOCK d'origine (pas la constante nominale globale) : « coupée dans »
+            // doit citer la lame dont ce morceau a vraiment été taillé.
+            nominalLength: b ? b.length : +pl.length.toFixed(1),
             usedWidth: +pl.usedWidth.toFixed(1), isRipped: pl.isRipped,
             batch: b ? `${b.length}×${b.width}` : pl.sourceBatchId,
             pack: packs.find((p) => p.id === packIdOf(pl.sourceBatchId))?.name ?? '—',
