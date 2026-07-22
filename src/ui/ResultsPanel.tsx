@@ -24,14 +24,21 @@ export default function ResultsPanel() {
 
       {(() => {
         const errs = diagnostics.filter((d) => d.severity === 'error').length;
-        const others = diagnostics.length - errs;
+        // Joints collés INÉVITABLES (limite physique du stock) : rien à corriger, on ne les
+        // compte pas comme « à vérifier » — sinon l'outil crie au défaut sur une contrainte
+        // qu'aucun calepinage ne peut lever sans couper en plein milieu.
+        const forced = diagnostics.filter((d) => d.kind === 'joint-flush-forced').length;
+        const others = diagnostics.length - errs - forced;
         if (diagnostics.length === 0) {
           return <div className="verdict-ok">✓ Plan posable</div>;
         }
         const cls = errs > 0 ? 'alert' : 'note';
+        const forcedTxt = forced ? `${others ? ' · ' : ' — '}${forced} joint(s) collé(s) inévitable(s) (limite du stock)` : '';
         const label = errs > 0
-          ? `${errs} erreur(s) à corriger${others ? ` · ${others} à vérifier` : ''}`
-          : `Posable — ${others} point(s) à vérifier`;
+          ? `${errs} erreur(s) à corriger${others ? ` · ${others} à vérifier` : ''}${forcedTxt}`
+          : others > 0
+            ? `Posable — ${others} point(s) à vérifier${forcedTxt}`
+            : `Posable${forced ? ` —  ${forced} joint(s) collé(s) inévitable(s) (limite du stock)` : ''}`;
         return (
           <>
             <div className={cls}><b>{label}</b></div>

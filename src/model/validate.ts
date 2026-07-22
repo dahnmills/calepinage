@@ -113,7 +113,40 @@ function jointDiagnostics(result: LayoutResult, config: LayoutConfig): Diagnosti
   const jointsOf = (segs: Seg[]) => segs.filter((s) => segs.some((o) => o !== s && Math.abs(o.x0 - s.x1) < 1.5)).map((s) => s.x1);
   const out: Diagnostic[] = [];
   const FLUSH = 6;
+  const off = Math.max(0, config.minJointOffset ?? 0);
+  const minCut = Math.max(1, config.minCutLength ?? 0);
   const rot = (x: number, y: number) => ({ x: x * Math.cos(-deg) - y * Math.sin(-deg), y: x * Math.sin(-deg) + y * Math.cos(-deg) });
+
+  // Le joint collé est-il ÉVITABLE ? Chaque joint de la rangée voisine interdit une bande de
+  // ±minOffset autour de lui. Si, une fois ces bandes retirées de la plage, il reste assez de
+  // place pour y loger les `nJoints` joints de cette rangée (espacés d'au moins `minCut`),
+  // alors un décalage sans faute EXISTE → le joint collé est un défaut évitable. Sinon la
+  // plage est trop contrainte par le stock : l'éviter imposerait une coupe en plein milieu
+  // (refusée), le joint est inévitable. Nécessairement approché (une seule plage par rangée),
+  // mais honnête : on ne crie « défaut » que là où un meilleur placement était réellement
+  // possible, et on explique quand c'est une limite physique du stock.
+  const avoidable = (prev: number[], segs: Seg[], nJoints: number): boolean => {
+    const S = Math.min(...segs.map((s) => s.x0)) + minCut;
+    const E = Math.max(...segs.map((s) => s.x1)) - minCut;
+    if (E <= S) return false;
+    // Intervalles libres = [S,E] moins les bandes ±off autour de chaque joint voisin.
+    let free: [number, number][] = [[S, E]];
+    for (const p of prev) {
+      const lo = p - off, hi = p + off;
+      const next: [number, number][] = [];
+      for (const [a, b] of free) {
+        if (hi <= a || lo >= b) { next.push([a, b]); continue; }
+        if (a < lo) next.push([a, Math.min(lo, b)]);
+        if (b > hi) next.push([Math.max(hi, a), b]);
+      }
+      free = next;
+    }
+    // Nombre max de joints espacés d'au moins `minCut` que ces intervalles peuvent accueillir.
+    let cap = 0;
+    for (const [a, b] of free) if (b > a) cap += Math.floor((b - a) / minCut) + 1;
+    return cap >= nJoints;
+  };
+
   for (let i = 1; i < keys.length; i++) {
     // Deux rangées séparées par un vide (pièce en L, décrochement, bandes non contiguës) ne
     // se comparent pas : sans ce garde-fou, un joint-flush est reporté sur une région sans
@@ -122,14 +155,20 @@ function jointDiagnostics(result: LayoutResult, config: LayoutConfig): Diagnosti
     const prev = jointsOf(rows.get(keys[i - 1])!);
     if (!prev.length) continue;
     const yTop = parseFloat(keys[i]);
-    for (const j of jointsOf(rows.get(keys[i])!)) {
+    const segs = rows.get(keys[i])!;
+    const cur = jointsOf(segs);
+    for (const j of cur) {
       const gap = Math.min(...prev.map((k) => Math.abs(j - k)));
       if (gap < FLUSH - 1e-6) {
-        // Position du joint en repère pièce : point (j, yTop) tourné à l'envers.
-        const c = rot(j, yTop);
-        out.push({ severity: 'warn', kind: 'joint-flush',
-          message: `Joint collé (${gap.toFixed(1)} cm de la rangée voisine).`,
-          region: { x: c.x - 8, y: c.y - 8, w: 16, h: 16 } });
+        const c = rot(j, yTop); // position du joint en repère pièce
+        const canAvoid = avoidable(prev, segs, cur.length);
+        out.push(canAvoid
+          ? { severity: 'warn', kind: 'joint-flush',
+              message: `Joint collé évitable (${gap.toFixed(1)} cm) — un meilleur décalage existait ici.`,
+              region: { x: c.x - 8, y: c.y - 8, w: 16, h: 16 } }
+          : { severity: 'info', kind: 'joint-flush-forced',
+              message: `Joint collé inévitable (${gap.toFixed(1)} cm) : stock trop court pour décaler sans couper en plein milieu. Quelques lames plus longues le supprimeraient.`,
+              region: { x: c.x - 8, y: c.y - 8, w: 16, h: 16 } });
       }
     }
   }
