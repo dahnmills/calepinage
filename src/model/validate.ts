@@ -11,7 +11,10 @@ export interface Diagnostic {
 }
 
 const STEP = 0.5;   // cm par cellule
-const ERODE = 3;    // 3 érosions ≈ 3 cm : sous ce seuil, jeu de dilatation ou filet de rive
+const ERODE = 2;   // ~1 cm de bord toléré (bruit de rastérisation aux coins de lame/cloison),
+                    // mais on VOIT les jeux ≥ ~2,5 cm. À 3 érosions un jeu de 3 cm au mur passait
+                    // pour « zéro trou » (faux feu vert). 3 cm au mur, par-dessus la dilatation,
+                    // c'est ÉNORME : la couverture doit atteindre le bord du champ.
 
 /** Vides réels du sol (au-delà du jeu de dilatation), un Diagnostic par composante. */
 function coverageHoles(result: LayoutResult): Diagnostic[] {

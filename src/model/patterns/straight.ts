@@ -412,7 +412,10 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
       // que le stock permet.
       let li = 0;
       let guard = 0;
-      while (x < run.end - Math.max(tol, 1e-3) && guard++ < 5000) {
+      // On couvre jusqu'au BORD DU CHAMP (1e-3), pas `tol` avant : s'arrêter à `run.end - tol`
+      // laissait un JEU AU MUR de la taille de `cutTolerance` (jusqu'à 3 cm), par-dessus le
+      // jeu de dilatation. `cutTolerance` est un débordement toléré, jamais un vide.
+      while (x < run.end - 1e-3 && guard++ < 5000) {
       const avail = run.end - x; // matière continue restante jusqu'au bout de la plage
       const planned = li < bestLens.length ? bestLens[li] : null;
       li++;
@@ -432,7 +435,13 @@ export function generateStraight(input: PatternInput): PlacedPlank[] {
       // allonge cette lame jusqu'au mur au lieu de laisser un confetti derrière elle.
       // Sans ça, boucher le trou produisait des morceaux de 3 cm — aussi inposables que le
       // vide qu'ils comblaient.
-      if (avail - want > tol && avail - want < minCut) want = avail;
+      //
+      // Le seuil bas est 1e-3, PAS `tol` : un reliquat sous la tolérance de coupe n'est PAS
+      // « négligeable » — c'est un JEU AU MUR de la taille de `cutTolerance` (jusqu'à 3 cm),
+      // par-dessus le jeu de dilatation déjà réservé. La sémantique de `cutTolerance` est un
+      // DÉBORDEMENT (la lame trop longue mord sur la dilatation), jamais un vide. On absorbe
+      // donc le reliquat dans cette lame : elle couvre jusqu'au bord du champ.
+      if (avail - want > 1e-3 && avail - want < minCut) want = avail;
       // La simulation a raisonné sur une copie fidèle des quantités : la lame exacte doit
       // exister. Sinon on retombe sur `request`, qui coupera dans une plus longue.
       const cut = inventory.takeExact(want, poseWidth, avoidPlanks)
