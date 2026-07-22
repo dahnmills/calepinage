@@ -600,3 +600,33 @@ l'**intérieur d'un run**. Et exclure `fromOffcut` (une chute réemployée n'est
   de banc vers le bas ; sans effet sur du stock hétéroclite.
 - 8-11 coupes-milieu résiduelles : épuisement de stock à l'affectation malgré `scarcity`. Un DP
   **vraiment** conscient des comptes par run (borné) les réduirait encore. Non fait.
+
+---
+
+## Solveur global : TENTÉ, ÉCHOUÉ — 2026-07-22
+
+Objectif : descendre sous flush=8 (mesure honnête validateur sur 5 plans réels) sans couper
+au milieu. **Trois pistes, toutes mesurées PIRES — ne pas refaire :**
+
+1. **Coupe d'ajustement libre partout** (DP autorise une coupe à toute position) : mid 47→121,
+   flush 8→12. La liberté de coupe crée des coupes EN PLEIN MILIEU sans réduire le flush.
+2. **Coupe rive-only (ender)** (coupe autorisée seulement en début/fin de rangée) : mid 47→69,
+   flush 8→12. N'aide pas le flush (il est distribué, pas que près du mur), augmente les coupes.
+3. **Relaxation par coordonnées** (séparer planification/affectation, re-planifier chaque
+   rangée contre ses 2 voisines, en boucle) : **flush 8→194 même à 0 sweep**. Cause STRUCTURELLE
+   (pas un bug) : les joints PLANIFIÉS (longueurs idéales du DP) ≠ joints POSÉS (le stock limité
+   force des substitutions → les joints bougent). Les rangées s'optimisent contre des positions
+   fantômes → à la pose tout s'aligne. Le greedy évite ça en bouclant sur les joints RÉELLEMENT
+   posés (rétroaction) ; la séparation la détruit. La descente naïve DIVERGE en plus (oscille).
+
+**Conclusion** : un vrai solveur global demanderait (a) une planification consciente du stock
+(DP ne planifie que le réalisable, dans l'ordre, pour que planifié=posé) PUIS (b) un recuit
+simulé avec coût global et accept/reject (pas de descente naïve). Semaines, pas heures, et
+pas garanti de battre le greedy — une partie des joints collés est imposée par le stock.
+
+## Option 3 livrée : verdict honnête (`validate.ts`, `ResultsPanel.tsx`)
+
+Le DP étant optimal par plage, un joint collé qu'il émet est INÉVITABLE sans coupe-milieu.
+`jointDiagnostics` teste l'évitabilité (bandes ±minOffset autour des joints voisins → reste-t-il
+la place de loger les joints de la rangée ?) : INÉVITABLE (`joint-flush-forced`, info, +levier
+« lames plus longues ») vs ÉVITABLE (`joint-flush`, warn). Mesure : 7/8 inévitables, 1 évitable.
