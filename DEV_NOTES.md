@@ -551,3 +551,52 @@ certaines cloisons, aberrantes sur d'autres.
 - Warning setState-in-render (ConfigPanel↔CanvasView) : à nettoyer un jour (bénin).
 - Cloisons existantes enregistrées en `align: 'center'` : `partitionRects` recalcule le côté
   depuis la géométrie, donc elles s'affichent correctement sans migration.
+
+---
+
+## Moteur de pose v2 : solveur DP (coupe en rive) — 2026-07-22
+
+Remplace la recherche aléatoire + `repairRun` (qui **recoupait en plein milieu** des rangées)
+par un **solveur par programmation dynamique** `planRunDP` dans `src/model/patterns/straight.ts`.
+
+### Principe
+- **Milieu = lames ENTIÈRES uniquement.** Coupe seulement en **RIVE** (début ET fin de rangée).
+  Le DP regarde toute la plage d'un coup → décalage ET coupes en rive à la fois (le glouton
+  sacrifiait l'un pour l'autre).
+- **Starter coupé en cascade** (NF DTU 51.11 « coupe perdue ») : le 1er morceau d'une rangée
+  peut être une coupe, servie depuis le pool de chutes (le bout de la rangée précédente). C'est
+  la SEULE façon de décaler **sans couper au milieu** — corrige l'alignement forcé sur stock
+  contraint (ex. couloir étroit, stock quasi-uniforme).
+- **Biais de phase par rangée** (`PHASE_PERIOD = 47`, coprime aux longueurs stock) : casse la
+  symétrie du DP déterministe. Sans lui, deux rangées de même longueur produisent la MÊME
+  séquence optimale → bande alignée. Poids faible (0,8) : départage sans dégrader le décalage.
+- **Conscience des quantités** (`scarcity(L)`) : le DP minimise les joints → préfère les lames
+  longues, souvent les plus RARES (2× 120). Il en planifiait plus qu'il n'en existe → la passe
+  d'affectation, à court, coupait une lame plus longue **en plein milieu**. Pénalité inverse du
+  compte ; les chutes réutilisables (cascade) sont épargnées.
+
+### Mesures (5 plans réels utilisateur ; coupes fraîches en **milieu de run**, hors rives cloison)
+| plan | v2 | ancien |
+|---|---|---|
+| 20(3) | 10 | 35 |
+| 20(4) | 8 | 26 |
+| 20 | 8 | 23 |
+| 21(1) | 10 | 32 |
+| 22(1) | 11 | 40 |
+
+**≈ −70 % de coupes-milieu.** Chute 3,6-6,0 % (vs 4,6-6,3), coupes totales en baisse,
+**trous = 0**, flush 0-3 (comparable). Banc 120 sims : trous = 0 partout, coupes 65,6 (vs 98,7),
+chute 3,4 % (vs 4,7).
+
+### Piège de mesure à ne pas refaire
+Un compteur naïf « pièce coupée non-première/non-dernière du **row** » **surévalue** : il compte
+les rives contre cloison (fins de run légitimes) comme des coupes-milieu (26 au lieu de 10-11).
+Toujours **découper le row en runs** (par les trous/cloisons, gap x > 2 cm) et ne compter que
+l'**intérieur d'un run**. Et exclure `fromOffcut` (une chute réemployée n'est pas une coupe).
+
+### Reste ouvert (non bloquant, absent des plans réels)
+- Cas synthétiques `uniforme-120` (stock 100 % lames de 120, pièce multiple) : alignement
+  **physiquement impossible** à éviter en lames entières → flush élevé au banc. Tirent la moyenne
+  de banc vers le bas ; sans effet sur du stock hétéroclite.
+- 8-11 coupes-milieu résiduelles : épuisement de stock à l'affectation malgré `scarcity`. Un DP
+  **vraiment** conscient des comptes par run (borné) les réduirait encore. Non fait.
