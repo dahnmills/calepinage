@@ -238,23 +238,23 @@ export type PartitionLike = { points: Point[]; thickness: number; align?: WallAl
 /**
  * Côté vers lequel porter l'épaisseur.
  *
- * Choix EXPLICITE (`left`/`right`, bouton de l'outil Cloison) : on le respecte tel quel et
- * on n'y touche JAMAIS. Le tracé reste la face, l'épaisseur toujours du même côté, quel que
- * soit le nombre de segments. Sans ça, l'aire signée d'un L faisait BASCULER le côté à
- * l'ajout d'un segment — le premier segment sautait de l'autre côté du trait (bug signalé :
- * on trace la face sur une marque, ajouter un bras la fait « remonter » au-dessus).
+ * Cloison en L (aire signée ≠ 0) : l'épaisseur va vers le CREUX (concave), TOUJOURS. C'est
+ * la règle métier de l'utilisateur : le tracé est la face EXTÉRIEURE, les dimensions
+ * extérieures = les longueurs tracées, et l'épaisseur du bras perpendiculaire rentre vers
+ * l'intérieur. Un L horizontal 293 + bras vertical de 7 mesure 293 à l'extérieur de l'angle
+ * et 293 − 7 = 286 à l'intérieur. Le côté concave se déduit de l'aire signée, donc correct
+ * quel que soit le SENS de tracé — c'est le point : l'utilisateur ne doit pas avoir à
+ * choisir, l'extérieur vaut la cote tracée dans tous les cas.
  *
- * Repli sur l'aire signée UNIQUEMENT pour `center`/absent : c'est le cas des cloisons
- * héritées (enregistrées sans côté) et de l'aperçu libre — l'épaisseur va alors vers le
- * CREUX (concave), pour que les dimensions extérieures d'un L égalent les longueurs tracées.
+ * Cloison droite (aire ≈ 0, pas de creux) : on garde le côté choisi (`left`/`right`, bouton
+ * de l'outil). Jamais `center` (épaisseur à cheval sur le trait = refus catégorique).
  */
 export function partitionAlign(pts: Point[], align?: WallAlign): WallAlign {
-  if (align === 'left' || align === 'right') return align;
   let area = 0;
   for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
     area += (pts[j].x + pts[i].x) * (pts[j].y - pts[i].y);
   }
-  if (Math.abs(area) < 1e-6) return 'left';
+  if (Math.abs(area) < 1e-6) return align === 'right' ? 'right' : 'left';
   return area > 0 ? 'left' : 'right';
 }
 
