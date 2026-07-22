@@ -236,18 +236,25 @@ function lineIntersect(p1: Point, d1: Point, p2: Point, d2: Point): Point | null
 export type PartitionLike = { points: Point[]; thickness: number; align?: WallAlign };
 
 /**
- * Côté vers lequel porter l'épaisseur : vers le CREUX de la polyligne (le côté concave),
- * pour que les dimensions extérieures = les longueurs tracées (une cloison en L de 60×30
- * encombre 60×30, on n'ajoute pas l'épaisseur du bras perpendiculaire). Le côté dépend du
- * sens de tracé : on le déduit de l'aire signée. Cloison droite (aire ~0) : pas de creux,
- * on garde le réglage choisi (défaut = une face, jamais l'axe milieu).
+ * Côté vers lequel porter l'épaisseur.
+ *
+ * Choix EXPLICITE (`left`/`right`, bouton de l'outil Cloison) : on le respecte tel quel et
+ * on n'y touche JAMAIS. Le tracé reste la face, l'épaisseur toujours du même côté, quel que
+ * soit le nombre de segments. Sans ça, l'aire signée d'un L faisait BASCULER le côté à
+ * l'ajout d'un segment — le premier segment sautait de l'autre côté du trait (bug signalé :
+ * on trace la face sur une marque, ajouter un bras la fait « remonter » au-dessus).
+ *
+ * Repli sur l'aire signée UNIQUEMENT pour `center`/absent : c'est le cas des cloisons
+ * héritées (enregistrées sans côté) et de l'aperçu libre — l'épaisseur va alors vers le
+ * CREUX (concave), pour que les dimensions extérieures d'un L égalent les longueurs tracées.
  */
 export function partitionAlign(pts: Point[], align?: WallAlign): WallAlign {
+  if (align === 'left' || align === 'right') return align;
   let area = 0;
   for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
     area += (pts[j].x + pts[i].x) * (pts[j].y - pts[i].y);
   }
-  if (Math.abs(area) < 1e-6) return align === 'right' ? 'right' : 'left';
+  if (Math.abs(area) < 1e-6) return 'left';
   return area > 0 ? 'left' : 'right';
 }
 

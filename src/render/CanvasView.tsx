@@ -12,7 +12,7 @@ import {
   snapDrawPoint, snapToGrid, nearestVertex, nearestEdge, projectToSegment, dist, angleDeg, sub,
   type Guide, type SnapResult,
 } from './roomEditing';
-import type { Point, Door as DoorT, Partition, Room } from '../model/types';
+import type { Point, Door as DoorT, Partition, Room, WallAlign } from '../model/types';
 
 interface DrawPreview extends SnapResult { hasLast: boolean }
 interface EdgeLabel { edgeIndex: number; sx: number; sy: number; length: number }
@@ -470,8 +470,8 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps, showC
           if (perp) chain = [p, { x: p.x + perp.x * 120, y: p.y + perp.y * 120 }];
         }
         if (chain.length >= 2 && (preview || drawing.length > 0)) {
-          const draft: Partition = { id: '__draft', points: chain, thickness: editor.wallThickness, align: 'center' };
-          if (drawing.length > 0) drawPartitionPreview(ctx, chain, editor.wallThickness, view);
+          const draft: Partition = { id: '__draft', points: chain, thickness: editor.wallThickness, align: editor.wallAlign };
+          if (drawing.length > 0) drawPartitionPreview(ctx, chain, editor.wallThickness, editor.wallAlign, view);
           // Cotes face à face EN DIRECT : on place en visant le vrai chiffre net, celui qu'on
           // relira une fois posée — « poser à 299 » donne bien 299 net, pas 299 à l'axe.
           drawPartitionGaps(ctx, { ...room, partitions: [...(room.partitions ?? []), draft] }, view, draft.id);
@@ -1101,12 +1101,18 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps, showC
           });
         } else if (e.key === 'Enter') {
           e.preventDefault();
-          setOverride((o) => {
-            if (o.len) { commitDrawFromInput(); return { len: '', ang: '' }; }
-            if (tool === 'wall') { if (drawing.length >= 2) closePartition(); }
-            else if (drawing.length >= 3) (tool === 'hole' ? closeHole() : closeRoom());
-            return o;
-          });
+          // On NE met PAS `commitDrawFromInput` (qui ajoute un point) dans l'updater de
+          // `setOverride` : React double-invoque les updaters en StrictMode, ce qui posait
+          // le point DEUX fois. On lit la longueur tapée directement (closure à jour, cf.
+          // deps de l'effet) et on commet hors updater, puis on efface la saisie.
+          if (override.len) {
+            commitDrawFromInput();
+            setOverride({ len: '', ang: '' });
+          } else if (tool === 'wall') {
+            if (drawing.length >= 2) closePartition();
+          } else if (drawing.length >= 3) {
+            (tool === 'hole' ? closeHole() : closeRoom());
+          }
         } else if (e.key === 'Escape') {
           setOverride((o) => (o.len ? { ...o, len: '' } : (clearRoom(), setTool('edit'), o)));
         }
@@ -1120,7 +1126,7 @@ export default function CanvasView({ highlightCuts, showNumbers, showGaps, showC
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [tool, isDrawing, drawing.length, selectedVertex, selectedEl, measureStart, cancelMeasure, undoDrawPoint, clearRoom, setTool, setConfig, closeRoom, closeHole, closePartition, deleteVertex, removePartition, removeDoor, commitDrawFromInput, commitStartLine, wallAlong, commitWallFace, measureLen, measurePoint, finishMeasure, snapshot]);
+  }, [tool, isDrawing, drawing.length, selectedVertex, selectedEl, measureStart, cancelMeasure, undoDrawPoint, clearRoom, setTool, setConfig, closeRoom, closeHole, closePartition, deleteVertex, removePartition, removeDoor, commitDrawFromInput, commitStartLine, wallAlong, commitWallFace, measureLen, measurePoint, finishMeasure, snapshot, override.len]);
 
   const commitLenEdit = () => {
     if (!lenEdit) return;
@@ -2304,10 +2310,10 @@ function drawVertices(
  * (centré / face gauche / face droite) — pour poser une FACE pile sur une cote.
  */
 function drawPartitionPreview(
-  ctx: CanvasRenderingContext2D, chain: Point[], thickness: number, v: View,
+  ctx: CanvasRenderingContext2D, chain: Point[], thickness: number, align: WallAlign, v: View,
 ) {
   if (chain.length < 2 || thickness <= 0) return;
-  const rects = partitionRects([{ points: chain, thickness, align: 'center' }]);
+  const rects = partitionRects([{ points: chain, thickness, align }]);
   ctx.save();
   for (const rect of rects) {
     ctx.beginPath();
